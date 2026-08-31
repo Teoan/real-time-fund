@@ -10,7 +10,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { useStorageStore, useUserStore } from '@/app/stores';
+import { useStorageStore } from '@/app/stores';
 import DataSourceAccuracyBadge from './DataSourceAccuracyBadge';
 
 function formatGszzlEstimate(gszzl) {
@@ -22,7 +22,6 @@ function formatGszzlEstimate(gszzl) {
 
 export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
   const isAdded = useStorageStore((s) => s.funds?.some((item) => item.code === fund?.code));
-  const user = useUserStore((s) => s.user);
   const [sourceId, setSourceId] = useState('1');
   const [loading, setLoading] = useState(true);
   const [estimates, setEstimates] = useState({
@@ -231,7 +230,7 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
         <div className="title" style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
             <span style={{ fontSize: '18px', fontWeight: 600, flexShrink: 0 }}>切换数据源</span>
-            {isAdded && user && (
+            {isAdded && (
               <div
                 style={{
                   display: 'flex',

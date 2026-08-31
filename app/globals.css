@@ -3011,16 +3011,6 @@ html::-webkit-scrollbar-thumb:active,
   word-break: break-all;
 }
 
-.mine-profile-login-btn {
-  margin-top: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: auto;
-  min-height: 40px;
-  padding: 8px 16px;
-}
-
 .mine-menu-list {
   list-style: none;
   margin: 0;
@@ -4489,61 +4479,6 @@ html::-webkit-scrollbar-thumb:active,
   background: rgba(248, 113, 113, 0.1);
 }
 
-/* ========== 登录模态框样式 ========== */
-.login-modal {
-  max-width: 400px !important;
-}
-
-.login-message {
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.login-message.error {
-  background: rgba(248, 113, 113, 0.15);
-  border: 1px solid rgba(248, 113, 113, 0.3);
-  color: var(--danger);
-}
-
-.login-message.success {
-  background: rgba(52, 211, 153, 0.15);
-  border: 1px solid rgba(52, 211, 153, 0.3);
-  color: var(--success);
-}
-
-/* ========== GitHub 登录按钮样式 ========== */
-.github-login-btn {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-.github-login-btn:hover {
-  border-color: var(--primary);
-  background: rgba(34, 211, 238, 0.05);
-}
-
-.github-login-btn:active {
-  transform: scale(0.98);
-}
-
-[data-theme='light'] .github-login-btn {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-}
-
-[data-theme='light'] .github-login-btn:hover {
-  background: #f1f5f9;
-  border-color: #94a3af;
-}
-
-[data-theme='light'] .github-login-btn img {
-  filter: brightness(0.2);
-}
-
 .button.secondary {
   background: transparent;
   border: 1px solid var(--border);
@@ -4585,11 +4520,6 @@ html::-webkit-scrollbar-thumb:active,
   .user-menu-item {
     padding: 14px 12px;
     font-size: 15px;
-  }
-
-  .login-modal {
-    max-width: 100% !important;
-    margin: 16px;
   }
 }
 

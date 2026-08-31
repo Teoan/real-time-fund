@@ -30,7 +30,6 @@ import GroupManageModal from './GroupManageModal';
 import GroupModal from './GroupModal';
 import HoldingEditModal from './HoldingEditModal';
 import HoldingActionModal from './HoldingActionModal';
-import LoginModal from './LoginModal';
 import SettingsModal from './SettingsModal';
 import SuccessModal from './SuccessModal';
 import TradeModal from './TradeModal';
@@ -83,8 +82,6 @@ function ModalsLayerContent({ callbacksRef }) {
   const feedbackNonce = useModalStore((s) => s.feedbackNonce);
   const weChatOpen = useModalStore((s) => s.weChatOpen);
   const donateOpen = useModalStore((s) => s.donateOpen);
-  const loginModalOpen = useModalStore((s) => s.loginModalOpen);
-  const loginInitialError = useModalStore((s) => s.loginInitialError);
   const tutorialDrawerOpen = useModalStore((s) => s.tutorialDrawerOpen);
   const updateLogOpen = useModalStore((s) => s.updateLogOpen);
   const portfolioEarningsOpen = useModalStore((s) => s.portfolioEarningsOpen);
@@ -139,8 +136,6 @@ function ModalsLayerContent({ callbacksRef }) {
   const setFeedbackOpen = (v) => _ms({ feedbackOpen: isFunction(v) ? v(_gs().feedbackOpen) : v });
   const setWeChatOpen = (v) => _ms({ weChatOpen: isFunction(v) ? v(_gs().weChatOpen) : v });
   const setDonateOpen = (v) => _ms({ donateOpen: isFunction(v) ? v(_gs().donateOpen) : v });
-  const setLoginModalOpen = (v) => _ms({ loginModalOpen: isFunction(v) ? v(_gs().loginModalOpen) : v });
-  const setLoginInitialError = (v) => _ms({ loginInitialError: isFunction(v) ? v(_gs().loginInitialError) : v });
   const setTutorialDrawerOpen = (v) => _ms({ tutorialDrawerOpen: isFunction(v) ? v(_gs().tutorialDrawerOpen) : v });
   const setUpdateLogOpen = (v) => _ms({ updateLogOpen: isFunction(v) ? v(_gs().updateLogOpen) : v });
   const setSortSettingOpen = (v) => _ms({ sortSettingOpen: isFunction(v) ? v(_gs().sortSettingOpen) : v });
@@ -942,21 +937,6 @@ function ModalsLayerContent({ callbacksRef }) {
       {/* ===== Modal: 扫描导入进度 ===== */}
       <AnimatePresence>
         {isScanImporting && <ScanImportProgressModal scanImportProgress={scanImportProgress} />}
-      </AnimatePresence>
-
-      {/* ===== Modal: 登录 ===== */}
-      <AnimatePresence>
-        {loginModalOpen && (
-          <LoginModal
-            onClose={() => {
-              setLoginModalOpen(false);
-              setLoginInitialError('');
-            }}
-            showToast={cb.current.showToast}
-            isExplicitLoginRef={cb.current.isExplicitLoginRef}
-            initialError={loginInitialError}
-          />
-        )}
       </AnimatePresence>
 
       {/* ===== Modal: 排序个性化设置 ===== */}

@@ -6,7 +6,7 @@ import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { isArray, isNumber, isPlainObject, isString } from 'lodash';
 
-import { useStorageStore, storageStore, useUserStore } from '../stores';
+import { useStorageStore, storageStore } from '../stores';
 import { recordValuation, setValuationSeries as persistValuationSeries } from '../lib/valuationTimeseries';
 import { DAILY_EARNINGS_SCOPE_ALL } from '@/app/constants';
 import { asyncPool } from '../lib/asyncHelper';
@@ -217,35 +217,24 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
         let bestSourcesMap = {};
         try {
           const currentFunds = useStorageStore.getState().funds || [];
-          const user = useUserStore.getState().user;
+          const autoSourceCodes = currentFunds
+            .filter((f) => f.autoSource && uniqueCodes.includes(f.code))
+            .map((f) => f.code);
 
-          if (!user) {
-            const hasAutoSource = currentFunds.some((f) => f.autoSource);
-            if (hasAutoSource) {
-              useStorageStore
-                .getState()
-                .setFunds((prev) => prev.map((f) => (f.autoSource ? { ...f, autoSource: false } : f)));
-            }
-          } else {
-            const autoSourceCodes = currentFunds
-              .filter((f) => f.autoSource && uniqueCodes.includes(f.code))
-              .map((f) => f.code);
-
-            if (autoSourceCodes.length > 0) {
-              bestSourcesMap = await fetchFundsBestSources(autoSourceCodes);
-              if (Object.keys(bestSourcesMap).length > 0) {
-                useStorageStore.getState().setFunds((prev) => {
-                  let changed = false;
-                  const next = prev.map((f) => {
-                    if (f.autoSource && bestSourcesMap[f.code] && f.dataSource !== bestSourcesMap[f.code]) {
-                      changed = true;
-                      return { ...f, dataSource: bestSourcesMap[f.code] };
-                    }
-                    return f;
-                  });
-                  return changed ? next : prev;
+          if (autoSourceCodes.length > 0) {
+            bestSourcesMap = await fetchFundsBestSources(autoSourceCodes);
+            if (Object.keys(bestSourcesMap).length > 0) {
+              useStorageStore.getState().setFunds((prev) => {
+                let changed = false;
+                const next = prev.map((f) => {
+                  if (f.autoSource && bestSourcesMap[f.code] && f.dataSource !== bestSourcesMap[f.code]) {
+                    changed = true;
+                    return { ...f, dataSource: bestSourcesMap[f.code] };
+                  }
+                  return f;
                 });
-              }
+                return changed ? next : prev;
+              });
             }
           }
         } catch (e) {

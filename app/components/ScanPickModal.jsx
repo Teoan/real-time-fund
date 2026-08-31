@@ -5,7 +5,6 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { fetchOcrDailyRemaining } from '../api/fund';
 import { ocrDailyRemaining } from '../lib/query-keys';
-import { useUserStore } from '../stores';
 
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
@@ -16,12 +15,11 @@ function getDroppedImageFiles(dataTransfer) {
 
 export default function ScanPickModal({ onClose, onPick, onFilesDrop, isScanning }) {
   const [isDragging, setIsDragging] = useState(false);
-  const user = useUserStore((s) => s.user);
 
   const { data: ocrUsage } = useQuery({
-    queryKey: ocrDailyRemaining(user?.id),
-    queryFn: () => fetchOcrDailyRemaining(user?.id),
-    enabled: !!user?.id,
+    queryKey: ocrDailyRemaining(),
+    queryFn: () => fetchOcrDailyRemaining(),
+    enabled: true,
     staleTime: 30_000
   });
 

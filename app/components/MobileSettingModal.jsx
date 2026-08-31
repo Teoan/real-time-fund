@@ -118,11 +118,6 @@ function MobileSettingReorderItem({
             下方百分比数字为收益率
           </span>
         )}
-        {item.id === 'relatedSector' && (
-          <span className="muted" style={{ fontSize: '12px' }}>
-            需登录账号
-          </span>
-        )}
       </div>
       {onToggleColumnVisibility && (
         <Switch

@@ -14,7 +14,7 @@ import { Drawer, DrawerClose, DrawerContent, DrawerHeader, DrawerTitle } from '@
 import { cn, formatMoney } from '@/lib/utils';
 import { supabase, isSupabaseConfigured } from '@/app/lib/supabase';
 import { calculateYtdReturnRate, mergeAllScopedDailyEarnings, mergeAllHoldings } from '@/app/lib/dailyEarnings';
-import { storageStore, useUserStore, useStorageStore } from '@/app/stores';
+import { storageStore, useStorageStore } from '@/app/stores';
 import { searchFunds } from '@/app/api/fund';
 import { CloseIcon } from './Icons';
 import FitText from './FitText';
@@ -177,7 +177,6 @@ function EarningsRankIllustration() {
 export default function MyEarningsCalendarPage({ open, onOpenChange, series = [], masked, onGoHome }) {
   const isMobile = useIsMobile();
   const reduceMotion = useReducedMotion();
-  const user = useUserStore((state) => state.user);
   const fundDailyEarnings = useStorageStore((state) => state.fundDailyEarnings);
   const funds = useStorageStore((state) => state.funds);
 
@@ -293,7 +292,7 @@ export default function MyEarningsCalendarPage({ open, onOpenChange, series = []
         setYtdRate(rate);
         setPercentile(null);
 
-        if (!isSupabaseConfigured || !user) return;
+        if (!isSupabaseConfigured) return;
 
         const { data, error } = await supabase.rpc('get_ytd_percentile', { p_ytd_rate: rate });
         const nextPercentile = Number(data);
@@ -309,7 +308,7 @@ export default function MyEarningsCalendarPage({ open, onOpenChange, series = []
     return () => {
       cancelled = true;
     };
-  }, [open, user]);
+  }, [open]);
 
   const earningsByDate = useMemo(() => {
     const map = new Map();

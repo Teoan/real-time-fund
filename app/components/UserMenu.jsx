@@ -3,40 +3,24 @@ import { useIsMobile } from '@/app/hooks/useIsMobile';
 
 import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
-import Image from 'next/image';
 import { AnimatePresence, motion } from 'framer-motion';
-import ConfirmModal from './ConfirmModal';
 import { HelpCircle } from 'lucide-react';
-import { CalendarIcon, LoginIcon, LogoutIcon, SettingsIcon, UserIcon, ListIcon } from './Icons';
+import { CalendarIcon, SettingsIcon, ListIcon } from './Icons';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 
 export default function UserMenu({
-  user,
-  userAvatar,
   navbarHeight,
   lastSyncTime,
   isSyncing,
   onSync,
   onOpenSettings,
   onOpenPortfolioEarnings,
-  onOpenLogin,
-  onLogout,
-  onLogoutConfirmOpenChange,
   onTutorial,
   onUpdateLog
 }) {
   const isMobile = useIsMobile();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const userMenuRef = useRef(null);
-
-  useEffect(() => {
-    onLogoutConfirmOpenChange?.(logoutConfirmOpen);
-  }, [logoutConfirmOpen, onLogoutConfirmOpenChange]);
-
-  useEffect(() => {
-    setUserMenuOpen(false);
-  }, [user?.id]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -56,32 +40,15 @@ export default function UserMenu({
         <Tooltip>
           <TooltipTrigger asChild>
             <button
-              className={`icon-button user-menu-trigger ${user ? 'logged-in' : ''}`}
-              aria-label={user ? '用户菜单' : '登录'}
+              className="icon-button user-menu-trigger"
+              aria-label="用户菜单"
               onClick={() => setUserMenuOpen(!userMenuOpen)}
             >
-              {user ? (
-                <div className="user-avatar-small">
-                  {userAvatar ? (
-                    <Image
-                      src={userAvatar}
-                      alt="用户头像"
-                      width={20}
-                      height={20}
-                      unoptimized
-                      style={{ borderRadius: '50%' }}
-                    />
-                  ) : (
-                    user.email?.charAt(0).toUpperCase() || 'U'
-                  )}
-                </div>
-              ) : (
-                <UserIcon width="18" height="18" />
-              )}
+              <SettingsIcon width="18" height="18" />
             </button>
           </TooltipTrigger>
           <TooltipContent>
-            <p>{user ? user.email || '用户' : '用户菜单'}</p>
+            <p>用户菜单</p>
           </TooltipContent>
         </Tooltip>
 
@@ -95,217 +62,102 @@ export default function UserMenu({
               transition={{ duration: 0.15 }}
               style={{ transformOrigin: 'top right', top: navbarHeight + (isMobile ? -20 : 10) }}
             >
-              {user ? (
-                <>
-                  <div className="user-menu-header">
-                    <div className="user-avatar-large">
-                      {userAvatar ? (
-                        <Image
-                          src={userAvatar}
-                          alt="用户头像"
-                          width={40}
-                          height={40}
-                          unoptimized
-                          style={{ borderRadius: '50%' }}
-                        />
-                      ) : (
-                        user.email?.charAt(0).toUpperCase() || 'U'
-                      )}
-                    </div>
-                    <div className="user-info">
-                      <span className="user-email">{user.email}</span>
-                      <span className="user-status">已登录</span>
-                      {lastSyncTime && (
-                        <span className="muted" style={{ fontSize: '10px', marginTop: 2 }}>
-                          同步于 {dayjs(lastSyncTime).format('MM-DD HH:mm')}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="user-menu-divider" />
-                  {!isMobile && (
-                    <>
-                      <button
-                        className="user-menu-item"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          onOpenPortfolioEarnings?.();
-                        }}
-                      >
-                        <CalendarIcon width="16" height="16" />
-                        <span>我的收益</span>
-                      </button>
-                      <button
-                        className="user-menu-item"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          onTutorial?.();
-                        }}
-                      >
-                        <HelpCircle width="16" height="16" />
-                        <span>使用帮助</span>
-                      </button>
-                      <button
-                        className="user-menu-item"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          onUpdateLog?.();
-                        }}
-                      >
-                        <ListIcon width="16" height="16" />
-                        <span>更新日志</span>
-                      </button>
-                    </>
+              <div className="user-menu-header">
+                <div className="user-info">
+                  <span className="user-email">本地用户</span>
+                  <span className="user-status">未登录</span>
+                  {lastSyncTime && (
+                    <span className="muted" style={{ fontSize: '10px', marginTop: 2 }}>
+                      同步于 {dayjs(lastSyncTime).format('MM-DD HH:mm')}
+                    </span>
                   )}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        className="user-menu-item"
-                        disabled={isSyncing}
-                        onClick={async () => {
-                          setUserMenuOpen(false);
-                          await onSync?.();
-                        }}
-                      >
-                        {isSyncing ? (
-                          <span
-                            className="loading-spinner"
-                            style={{
-                              width: 16,
-                              height: 16,
-                              border: '2px solid var(--muted)',
-                              borderTopColor: 'var(--primary)',
-                              borderRadius: '50%',
-                              animation: 'spin 1s linear infinite',
-                              flexShrink: 0
-                            }}
-                          />
-                        ) : (
-                          <svg
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            style={{ flexShrink: 0 }}
-                          >
-                            <path
-                              d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"
-                              stroke="var(--primary)"
-                            />
-                            <path d="M12 12v9" stroke="var(--accent)" />
-                            <path d="m16 16-4-4-4 4" stroke="var(--accent)" />
-                          </svg>
-                        )}
-                        <span>{isSyncing ? '同步中...' : '同步'}</span>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>手动同步配置到云端</p>
-                    </TooltipContent>
-                  </Tooltip>
-                  <button
-                    className="user-menu-item"
-                    onClick={() => {
-                      setUserMenuOpen(false);
-                      onOpenSettings?.();
+                </div>
+              </div>
+              <div className="user-menu-divider" />
+              <button
+                className="user-menu-item"
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  onOpenPortfolioEarnings?.();
+                }}
+              >
+                <CalendarIcon width="16" height="16" />
+                <span>我的收益</span>
+              </button>
+              <button
+                className="user-menu-item"
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  onTutorial?.();
+                }}
+              >
+                <HelpCircle width="16" height="16" />
+                <span>使用帮助</span>
+              </button>
+              <button
+                className="user-menu-item"
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  onUpdateLog?.();
+                }}
+              >
+                <ListIcon width="16" height="16" />
+                <span>更新日志</span>
+              </button>
+              <button
+                className="user-menu-item"
+                disabled={isSyncing}
+                onClick={async () => {
+                  setUserMenuOpen(false);
+                  await onSync?.();
+                }}
+              >
+                {isSyncing ? (
+                  <span
+                    className="loading-spinner"
+                    style={{
+                      width: 16,
+                      height: 16,
+                      border: '2px solid var(--muted)',
+                      borderTopColor: 'var(--primary)',
+                      borderRadius: '50%',
+                      animation: 'spin 1s linear infinite',
+                      flexShrink: 0
                     }}
+                  />
+                ) : (
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ flexShrink: 0 }}
                   >
-                    <SettingsIcon width="16" height="16" />
-                    <span>设置</span>
-                  </button>
-                  <button
-                    className="user-menu-item danger"
-                    onClick={() => {
-                      setUserMenuOpen(false);
-                      setLogoutConfirmOpen(true);
-                    }}
-                  >
-                    <LogoutIcon width="16" height="16" />
-                    <span>登出</span>
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    className="user-menu-item"
-                    onClick={() => {
-                      setUserMenuOpen(false);
-                      onOpenLogin?.();
-                    }}
-                  >
-                    <LoginIcon width="16" height="16" />
-                    <span>登录</span>
-                  </button>
-                  {!isMobile && (
-                    <>
-                      <button
-                        className="user-menu-item"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          onOpenPortfolioEarnings?.();
-                        }}
-                      >
-                        <CalendarIcon width="16" height="16" />
-                        <span>我的收益</span>
-                      </button>
-                      <button
-                        className="user-menu-item"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          onTutorial?.();
-                        }}
-                      >
-                        <HelpCircle width="16" height="16" />
-                        <span>使用帮助</span>
-                      </button>
-                      <button
-                        className="user-menu-item"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          onUpdateLog?.();
-                        }}
-                      >
-                        <ListIcon width="16" height="16" />
-                        <span>更新日志</span>
-                      </button>
-                    </>
-                  )}
-                  <button
-                    className="user-menu-item"
-                    onClick={() => {
-                      setUserMenuOpen(false);
-                      onOpenSettings?.();
-                    }}
-                  >
-                    <SettingsIcon width="16" height="16" />
-                    <span>设置</span>
-                  </button>
-                </>
-              )}
+                    <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 0 1 1 2.5 8.242" stroke="var(--primary)" />
+                    <path d="M12 12v9" stroke="var(--accent)" />
+                    <path d="m16 16-4-4-4 4" stroke="var(--accent)" />
+                  </svg>
+                )}
+                <span>{isSyncing ? '同步中...' : '同步'}</span>
+              </button>
+              <button
+                className="user-menu-item"
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  onOpenSettings?.();
+                }}
+              >
+                <SettingsIcon width="16" height="16" />
+                <span>设置</span>
+              </button>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
-
-      <AnimatePresence>
-        {logoutConfirmOpen && (
-          <ConfirmModal
-            title="确认登出"
-            message="确定要退出当前账号吗？"
-            icon={<LogoutIcon width="20" height="20" className="shrink-0 text-[var(--danger)]" />}
-            confirmText="确认登出"
-            onConfirm={() => {
-              setLogoutConfirmOpen(false);
-              onLogout?.();
-            }}
-            onCancel={() => setLogoutConfirmOpen(false)}
-          />
-        )}
-      </AnimatePresence>
     </>
   );
 }

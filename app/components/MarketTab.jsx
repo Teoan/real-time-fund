@@ -7,8 +7,6 @@ import {
   Filter,
   ChevronDown,
   ChevronRight,
-  LogIn,
-  Lock,
   TrendingUp,
   BarChart3,
   Activity,
@@ -19,7 +17,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useReactTable, getCoreRowModel, flexRender } from '@tanstack/react-table';
 import { fetchFundValuationRanking, fetchFundPeriodReturns } from '../api/fund';
 import { cn } from '@/lib/utils';
-import { useStorageStore, useUserStore, useModalStore } from '../stores';
+import { useStorageStore, useModalStore } from '../stores';
 import { supabase } from '../lib/supabase';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Empty, EmptyTitle, EmptyDescription, EmptyContent, EmptyMedia } from '@/components/ui/empty';
@@ -95,7 +93,6 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
   const [sectorFilter, setSectorFilter] = useState('industry'); // industry, concept
   const [sectorSort, setSectorSort] = useState('change_pct'); // change_pct, net_inflow
   const [sectorSortOrder, setSectorSortOrder] = useState('desc'); // desc, asc
-  const user = useUserStore((s) => s.user);
   const isMobile = useIsMobile();
 
   // Storage for favorites and funds
@@ -272,356 +269,389 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
 
   return (
     <div className="market-tab-container flex flex-col min-h-[60vh]">
-      {!user ? (
-        <div className="flex-1 w-full flex flex-col items-center justify-start sm:justify-center px-4 pt-4 pb-12 sm:p-6 my-0">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.4, ease: 'easeOut' }}
-            className="glass max-w-md w-full p-6 sm:p-8 flex flex-col items-center text-center relative overflow-hidden"
-          >
-            {/* Removed background decorative blurs per user request */}
+      {/* 热门板块 */}
+      {(sectorsLoading || (sectorEstimates && sectorEstimates.length > 0)) && (
+        <div className="market-section">
+          <div className="market-section-header">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <h2 className="market-section-title whitespace-nowrap flex-shrink-0">热门板块</h2>
+              <ToggleGroup
+                type="single"
+                value={sectorFilter}
+                onValueChange={(v) => v && setSectorFilter(v)}
+                className="bg-black/5 dark:bg-white/10 p-0.5 rounded-md border border-black/5 dark:border-white/5 gap-0 shadow-inner"
+              >
+                <ToggleGroupItem
+                  value="industry"
+                  className="h-6 px-2 text-[10px] rounded-sm border-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm transition-all cursor-pointer"
+                >
+                  行业
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  value="concept"
+                  className="h-6 px-2 text-[10px] rounded-sm border-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm transition-all cursor-pointer"
+                >
+                  概念
+                </ToggleGroupItem>
+              </ToggleGroup>
 
-            <div className="size-16 rounded-2xl bg-primary/10 flex items-center justify-center text-primary mb-6 shadow-inner ring-1 ring-primary/20 relative z-10">
-              <Lock className="size-8" strokeWidth={1.5} />
+              <ToggleGroup
+                type="single"
+                value={sectorSort}
+                onValueChange={(v) => {
+                  if (!v) {
+                    setSectorSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'));
+                  } else {
+                    setSectorSort(v);
+                    setSectorSortOrder('desc');
+                  }
+                }}
+                className="bg-black/5 dark:bg-white/10 p-0.5 rounded-md border border-black/5 dark:border-white/5 gap-0 shadow-inner"
+              >
+                <ToggleGroupItem
+                  value="change_pct"
+                  className="h-6 px-2 text-[10px] flex items-center gap-0.5 rounded-sm border-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm transition-all cursor-pointer"
+                >
+                  按涨幅
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      flexDirection: 'column',
+                      lineHeight: 1,
+                      fontSize: '8px',
+                      transform: 'scale(0.8)',
+                      transformOrigin: 'center',
+                      opacity: sectorSort === 'change_pct' ? 1 : 0.3
+                    }}
+                  >
+                    <span style={{ opacity: sectorSort === 'change_pct' && sectorSortOrder === 'asc' ? 1 : 0.3 }}>
+                      ▲
+                    </span>
+                    <span style={{ opacity: sectorSort === 'change_pct' && sectorSortOrder === 'desc' ? 1 : 0.3 }}>
+                      ▼
+                    </span>
+                  </span>
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  value="net_inflow"
+                  className="h-6 px-2 text-[10px] flex items-center gap-0.5 rounded-sm border-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm transition-all cursor-pointer"
+                >
+                  按资金流入
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      flexDirection: 'column',
+                      lineHeight: 1,
+                      fontSize: '8px',
+                      transform: 'scale(0.8)',
+                      transformOrigin: 'center',
+                      opacity: sectorSort === 'net_inflow' ? 1 : 0.3
+                    }}
+                  >
+                    <span style={{ opacity: sectorSort === 'net_inflow' && sectorSortOrder === 'asc' ? 1 : 0.3 }}>
+                      ▲
+                    </span>
+                    <span style={{ opacity: sectorSort === 'net_inflow' && sectorSortOrder === 'desc' ? 1 : 0.3 }}>
+                      ▼
+                    </span>
+                  </span>
+                </ToggleGroupItem>
+              </ToggleGroup>
             </div>
-
-            <h3 className="text-xl font-semibold mb-2 text-foreground relative z-10 tracking-tight">
-              需要登录解锁行情
-            </h3>
-
-            <p className="text-sm text-muted-foreground mb-8 relative z-10 leading-relaxed">
-              登录后即可查看实时热门板块、资金流入排行及大盘估值数据，快来探索更多专属功能吧。
-            </p>
-
-            {/* Feature list */}
-            <div className="w-full flex flex-col gap-3 mb-8 relative z-10 text-left">
-              <div className="flex items-center gap-3 text-sm text-muted-foreground bg-foreground/5 p-3 rounded-xl border border-border/50">
-                <div className="bg-background/80 p-1.5 rounded-lg shadow-sm border border-border/50">
-                  <TrendingUp className="size-4 text-[var(--danger)]" />
-                </div>
-                <span>实时热门板块追踪</span>
-              </div>
-              <div className="flex items-center gap-3 text-sm text-muted-foreground bg-foreground/5 p-3 rounded-xl border border-border/50">
-                <div className="bg-background/80 p-1.5 rounded-lg shadow-sm border border-border/50">
-                  <Activity className="size-4 text-blue-500" />
-                </div>
-                <span>主力资金流入分析</span>
-              </div>
-              <div className="flex items-center gap-3 text-sm text-muted-foreground bg-foreground/5 p-3 rounded-xl border border-border/50">
-                <div className="bg-background/80 p-1.5 rounded-lg shadow-sm border border-border/50">
-                  <BarChart3 className="size-4 text-[var(--success)]" />
-                </div>
-                <span>全市场估值涨跌榜单</span>
-              </div>
-            </div>
-
-            <Button
-              size="lg"
-              className="w-full relative z-10 shadow-lg shadow-primary/20 transition-all duration-300 hover:shadow-primary/40 hover:-translate-y-0.5 rounded-xl h-12 text-base font-medium cursor-pointer"
-              onClick={() => useModalStore.setState({ loginModalOpen: true })}
+            <button
+              className="market-section-more"
+              onClick={() =>
+                useModalStore.setState({
+                  allSectorsModalOpen: true,
+                  allSectorsFilter: sectorFilter,
+                  allSectorsSort: sectorSort,
+                  allSectorsSortOrder: sectorSortOrder
+                })
+              }
             >
-              <LogIn className="size-5 mr-2" />
-              立即登录 / 注册
-            </Button>
+              全部 <ChevronRight size={14} />
+            </button>
+          </div>
+
+          <motion.div layout className="market-sector-grid">
+            <AnimatePresence mode="popLayout">
+              {sectorsLoading
+                ? Array.from({ length: isMobile ? 4 : 10 }).map((_, i) => (
+                    <motion.div
+                      key={`skeleton-sector-${i}`}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      transition={{ type: 'spring', stiffness: 250, damping: 25, mass: 1 }}
+                      className="market-sector-card glass"
+                    >
+                      <div className="market-sector-main items-center mt-0.5">
+                        <Skeleton className="h-5 w-16" />
+                        <Skeleton className="h-4 w-12" />
+                      </div>
+                      <div className="market-sector-leader flex items-center mt-1 h-[18px]">
+                        <Skeleton className="h-3 w-20" />
+                      </div>
+                    </motion.div>
+                  ))
+                : filteredAndSortedSectors?.map((sector) => {
+                    const pctStr = sector.change_pct != null ? String(sector.change_pct) : '0.00';
+                    const pctNum = parseFloat(pctStr);
+                    const isUp = pctNum > 0;
+                    const isDown = pctNum < 0;
+
+                    return (
+                      <motion.div
+                        layout
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.9 }}
+                        transition={{ type: 'spring', stiffness: 250, damping: 25, mass: 1 }}
+                        key={sector.id || sector.sector_id}
+                        className="market-sector-card glass"
+                      >
+                        <div className="market-sector-main">
+                          <span className="market-sector-name">{sector.sector_name}</span>
+                          {sectorSort === 'change_pct' ? (
+                            <span className={cn('market-sector-pct', getColorClass(pctStr))}>
+                              {formatPercent(pctStr)}
+                            </span>
+                          ) : (
+                            <span className={cn('market-sector-pct', getColorClass(sector.net_inflow))}>
+                              {sector.net_inflow ? (sector.net_inflow / 100000000).toFixed(2) + '亿' : '--'}
+                            </span>
+                          )}
+                        </div>
+                        <div className="market-sector-leader">
+                          {sectorSort === 'change_pct' ? (
+                            <>
+                              资金流入: {sector.net_inflow ? (sector.net_inflow / 100000000).toFixed(2) + '亿' : '--'}
+                            </>
+                          ) : (
+                            <>
+                              涨跌幅: <span className={getColorClass(pctStr)}>{formatPercent(pctStr)}</span>
+                            </>
+                          )}
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+            </AnimatePresence>
           </motion.div>
         </div>
-      ) : (
-        <>
-          {/* 热门板块 */}
-          {(sectorsLoading || (sectorEstimates && sectorEstimates.length > 0)) && (
-            <div className="market-section">
-              <div className="market-section-header">
-                <div className="flex items-center gap-2 sm:gap-3">
-                  <h2 className="market-section-title whitespace-nowrap flex-shrink-0">热门板块</h2>
-                  <ToggleGroup
-                    type="single"
-                    value={sectorFilter}
-                    onValueChange={(v) => v && setSectorFilter(v)}
-                    className="bg-black/5 dark:bg-white/10 p-0.5 rounded-md border border-black/5 dark:border-white/5 gap-0 shadow-inner"
-                  >
-                    <ToggleGroupItem
-                      value="industry"
-                      className="h-6 px-2 text-[10px] rounded-sm border-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm transition-all cursor-pointer"
-                    >
-                      行业
-                    </ToggleGroupItem>
-                    <ToggleGroupItem
-                      value="concept"
-                      className="h-6 px-2 text-[10px] rounded-sm border-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm transition-all cursor-pointer"
-                    >
-                      概念
-                    </ToggleGroupItem>
-                  </ToggleGroup>
+      )}
 
-                  <ToggleGroup
-                    type="single"
-                    value={sectorSort}
-                    onValueChange={(v) => {
-                      if (!v) {
-                        setSectorSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'));
-                      } else {
-                        setSectorSort(v);
-                        setSectorSortOrder('desc');
-                      }
-                    }}
-                    className="bg-black/5 dark:bg-white/10 p-0.5 rounded-md border border-black/5 dark:border-white/5 gap-0 shadow-inner"
-                  >
-                    <ToggleGroupItem
-                      value="change_pct"
-                      className="h-6 px-2 text-[10px] flex items-center gap-0.5 rounded-sm border-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm transition-all cursor-pointer"
-                    >
-                      按涨幅
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          flexDirection: 'column',
-                          lineHeight: 1,
-                          fontSize: '8px',
-                          transform: 'scale(0.8)',
-                          transformOrigin: 'center',
-                          opacity: sectorSort === 'change_pct' ? 1 : 0.3
-                        }}
-                      >
-                        <span style={{ opacity: sectorSort === 'change_pct' && sectorSortOrder === 'asc' ? 1 : 0.3 }}>
-                          ▲
-                        </span>
-                        <span style={{ opacity: sectorSort === 'change_pct' && sectorSortOrder === 'desc' ? 1 : 0.3 }}>
-                          ▼
-                        </span>
-                      </span>
-                    </ToggleGroupItem>
-                    <ToggleGroupItem
-                      value="net_inflow"
-                      className="h-6 px-2 text-[10px] flex items-center gap-0.5 rounded-sm border-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm transition-all cursor-pointer"
-                    >
-                      按资金流入
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          flexDirection: 'column',
-                          lineHeight: 1,
-                          fontSize: '8px',
-                          transform: 'scale(0.8)',
-                          transformOrigin: 'center',
-                          opacity: sectorSort === 'net_inflow' ? 1 : 0.3
-                        }}
-                      >
-                        <span style={{ opacity: sectorSort === 'net_inflow' && sectorSortOrder === 'asc' ? 1 : 0.3 }}>
-                          ▲
-                        </span>
-                        <span style={{ opacity: sectorSort === 'net_inflow' && sectorSortOrder === 'desc' ? 1 : 0.3 }}>
-                          ▼
-                        </span>
-                      </span>
-                    </ToggleGroupItem>
-                  </ToggleGroup>
-                </div>
-                <button
-                  className="market-section-more"
-                  onClick={() =>
-                    useModalStore.setState({
-                      allSectorsModalOpen: true,
-                      allSectorsFilter: sectorFilter,
-                      allSectorsSort: sectorSort,
-                      allSectorsSortOrder: sectorSortOrder
-                    })
-                  }
-                >
-                  全部 <ChevronRight size={14} />
-                </button>
-              </div>
-
-              <motion.div layout className="market-sector-grid">
+      {/* 榜单栏 */}
+      <div className="market-ranking-section glass" id="market-ranking-section">
+        <div className="market-ranking-tabs" style={{ padding: '8px 12px' }}>
+          <div className="tabs-container">
+            <div className="tabs-scroll-area">
+              <div className="tabs">
                 <AnimatePresence mode="popLayout">
-                  {sectorsLoading
-                    ? Array.from({ length: isMobile ? 4 : 10 }).map((_, i) => (
-                        <motion.div
-                          key={`skeleton-sector-${i}`}
-                          initial={{ opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.9 }}
-                          transition={{ type: 'spring', stiffness: 250, damping: 25, mass: 1 }}
-                          className="market-sector-card glass"
-                        >
-                          <div className="market-sector-main items-center mt-0.5">
-                            <Skeleton className="h-5 w-16" />
-                            <Skeleton className="h-4 w-12" />
-                          </div>
-                          <div className="market-sector-leader flex items-center mt-1 h-[18px]">
-                            <Skeleton className="h-3 w-20" />
-                          </div>
-                        </motion.div>
-                      ))
-                    : filteredAndSortedSectors?.map((sector) => {
-                        const pctStr = sector.change_pct != null ? String(sector.change_pct) : '0.00';
-                        const pctNum = parseFloat(pctStr);
-                        const isUp = pctNum > 0;
-                        const isDown = pctNum < 0;
-
-                        return (
-                          <motion.div
-                            layout
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.9 }}
-                            transition={{ type: 'spring', stiffness: 250, damping: 25, mass: 1 }}
-                            key={sector.id || sector.sector_id}
-                            className="market-sector-card glass"
-                          >
-                            <div className="market-sector-main">
-                              <span className="market-sector-name">{sector.sector_name}</span>
-                              {sectorSort === 'change_pct' ? (
-                                <span className={cn('market-sector-pct', getColorClass(pctStr))}>
-                                  {formatPercent(pctStr)}
-                                </span>
-                              ) : (
-                                <span className={cn('market-sector-pct', getColorClass(sector.net_inflow))}>
-                                  {sector.net_inflow ? (sector.net_inflow / 100000000).toFixed(2) + '亿' : '--'}
-                                </span>
-                              )}
-                            </div>
-                            <div className="market-sector-leader">
-                              {sectorSort === 'change_pct' ? (
-                                <>
-                                  资金流入:{' '}
-                                  {sector.net_inflow ? (sector.net_inflow / 100000000).toFixed(2) + '亿' : '--'}
-                                </>
-                              ) : (
-                                <>
-                                  涨跌幅: <span className={getColorClass(pctStr)}>{formatPercent(pctStr)}</span>
-                                </>
-                              )}
-                            </div>
-                          </motion.div>
-                        );
-                      })}
+                  <motion.button
+                    layout
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    key="increase"
+                    className={cn('tab', activeTab === 'increase' && 'active')}
+                    onClick={() => {
+                      setActiveTab('increase');
+                      setPageIndex(1);
+                    }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
+                  >
+                    估值涨幅
+                  </motion.button>
+                  <motion.button
+                    layout
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    key="decrease"
+                    className={cn('tab', activeTab === 'decrease' && 'active')}
+                    onClick={() => {
+                      setActiveTab('decrease');
+                      setPageIndex(1);
+                    }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
+                  >
+                    估值跌幅
+                  </motion.button>
+                  <motion.button
+                    layout
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    key="hot"
+                    className={cn('tab', activeTab === 'hot' && 'active')}
+                    onClick={() => {
+                      setActiveTab('hot');
+                      setPageIndex(1);
+                    }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
+                  >
+                    成交热度
+                  </motion.button>
+                  <motion.button
+                    layout
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    key="actual"
+                    className={cn('tab', activeTab === 'actual' && 'active')}
+                    onClick={() => {
+                      setActiveTab('actual');
+                      setPageIndex(1);
+                    }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
+                  >
+                    实际涨幅
+                  </motion.button>
                 </AnimatePresence>
-              </motion.div>
+              </div>
             </div>
-          )}
+          </div>
+        </div>
 
-          {/* 榜单栏 */}
-          <div className="market-ranking-section glass" id="market-ranking-section">
-            <div className="market-ranking-tabs" style={{ padding: '8px 12px' }}>
-              <div className="tabs-container">
-                <div className="tabs-scroll-area">
-                  <div className="tabs">
-                    <AnimatePresence mode="popLayout">
-                      <motion.button
-                        layout
-                        initial={{ opacity: 0, scale: 0.8 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.8 }}
-                        key="increase"
-                        className={cn('tab', activeTab === 'increase' && 'active')}
-                        onClick={() => {
-                          setActiveTab('increase');
-                          setPageIndex(1);
-                        }}
-                        transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
-                      >
-                        估值涨幅
-                      </motion.button>
-                      <motion.button
-                        layout
-                        initial={{ opacity: 0, scale: 0.8 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.8 }}
-                        key="decrease"
-                        className={cn('tab', activeTab === 'decrease' && 'active')}
-                        onClick={() => {
-                          setActiveTab('decrease');
-                          setPageIndex(1);
-                        }}
-                        transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
-                      >
-                        估值跌幅
-                      </motion.button>
-                      <motion.button
-                        layout
-                        initial={{ opacity: 0, scale: 0.8 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.8 }}
-                        key="hot"
-                        className={cn('tab', activeTab === 'hot' && 'active')}
-                        onClick={() => {
-                          setActiveTab('hot');
-                          setPageIndex(1);
-                        }}
-                        transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
-                      >
-                        成交热度
-                      </motion.button>
-                      <motion.button
-                        layout
-                        initial={{ opacity: 0, scale: 0.8 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.8 }}
-                        key="actual"
-                        className={cn('tab', activeTab === 'actual' && 'active')}
-                        onClick={() => {
-                          setActiveTab('actual');
-                          setPageIndex(1);
-                        }}
-                        transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
-                      >
-                        实际涨幅
-                      </motion.button>
-                    </AnimatePresence>
+        <div className="pc-fund-table" style={{ width: '100%', overflow: 'hidden' }}>
+          <style>{`
+            .market-ranking-table-row {
+              display: flex !important;
+              width: 100%;
+              gap: 0 !important;
+              padding: 12px 16px !important;
+              --row-bg: var(--bg);
+              background-color: var(--row-bg) !important;
+              transition: background-color 0.15s ease;
+              cursor: default;
+              border-bottom: none !important;
+            }
+            @media (min-width: 640px) {
+              .market-ranking-table-row:hover,
+              .market-ranking-table-row.row-even:hover {
+                --row-bg: var(--table-row-hover-bg);
+                background-color: var(--table-row-hover-bg) !important;
+              }
+            }
+            .market-ranking-table-row:nth-child(even),
+            .market-ranking-table-row.row-even {
+              background-color: var(--table-row-alt-bg) !important;
+            }
+            .market-ranking-table-header {
+              display: flex !important;
+              width: 100%;
+              gap: 0 !important;
+              padding: 12px 16px !important;
+              background: rgba(255, 255, 255, 0.05);
+              border-bottom: 1px solid var(--border);
+            }
+            [data-theme="light"] .market-ranking-table-header {
+              background: rgba(0, 0, 0, 0.04) !important;
+            }
+          `}</style>
+
+          {rankingTable.getHeaderGroups().map((hg) => (
+            <div key={hg.id} className="table-header-row market-ranking-table-header">
+              {hg.headers.map((header) => {
+                const align = header.column.columnDef.meta?.align || 'text-center';
+                const flex = header.column.columnDef.meta?.flex || 1;
+                const isRight = align === 'text-right';
+
+                return (
+                  <div
+                    key={header.id}
+                    className={`table-header-cell ${align}`}
+                    style={{
+                      flex,
+                      padding: '0 8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: isRight ? 'flex-end' : 'flex-start'
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: 13,
+                        fontWeight: 700,
+                        letterSpacing: '0.5px'
+                      }}
+                    >
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+
+          <div className="market-ranking-list">
+            {rankingLoading ? (
+              Array.from({ length: 10 }).map((_, index) => (
+                <div
+                  key={`skeleton-ranking-${index}`}
+                  className={`table-row market-ranking-table-row ${index % 2 === 1 ? 'row-even' : ''}`}
+                >
+                  <div
+                    className="table-cell text-left"
+                    style={{ flex: 2, padding: '0 8px', display: 'flex', alignItems: 'center' }}
+                  >
+                    <div className="w-full">
+                      <div className="flex items-center gap-1.5 mb-1.5 mt-0.5">
+                        <Skeleton className="size-4 rounded-full flex-shrink-0" />
+                        <Skeleton className="h-[18px] w-28 sm:w-40" />
+                      </div>
+                      <div className="flex items-center gap-2 pl-5">
+                        <Skeleton className="h-3 w-12" />
+                        <Skeleton className="h-[14px] w-8" />
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    className="table-cell text-right"
+                    style={{
+                      flex: 1,
+                      padding: '0 8px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-end',
+                      justifyContent: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <Skeleton className="h-[18px] w-14 sm:w-16" />
+                    <Skeleton className="h-3 w-10 sm:w-12" />
+                  </div>
+                  <div
+                    className="table-cell text-right"
+                    style={{
+                      flex: 1,
+                      padding: '0 8px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-end',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <Skeleton className="h-[18px] w-14 sm:w-16" />
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <div className="pc-fund-table" style={{ width: '100%', overflow: 'hidden' }}>
-              <style>{`
-                .market-ranking-table-row {
-                  display: flex !important;
-                  width: 100%;
-                  gap: 0 !important;
-                  padding: 12px 16px !important;
-                  --row-bg: var(--bg);
-                  background-color: var(--row-bg) !important;
-                  transition: background-color 0.15s ease;
-                  cursor: default;
-                  border-bottom: none !important;
-                }
-                @media (min-width: 640px) {
-                  .market-ranking-table-row:hover,
-                  .market-ranking-table-row.row-even:hover {
-                    --row-bg: var(--table-row-hover-bg);
-                    background-color: var(--table-row-hover-bg) !important;
-                  }
-                }
-                .market-ranking-table-row:nth-child(even),
-                .market-ranking-table-row.row-even {
-                  background-color: var(--table-row-alt-bg) !important;
-                }
-                .market-ranking-table-header {
-                  display: flex !important;
-                  width: 100%;
-                  gap: 0 !important;
-                  padding: 12px 16px !important;
-                  background: rgba(255, 255, 255, 0.05);
-                  border-bottom: 1px solid var(--border);
-                }
-                [data-theme="light"] .market-ranking-table-header {
-                  background: rgba(0, 0, 0, 0.04) !important;
-                }
-              `}</style>
-
-              {rankingTable.getHeaderGroups().map((hg) => (
-                <div key={hg.id} className="table-header-row market-ranking-table-header">
-                  {hg.headers.map((header) => {
-                    const align = header.column.columnDef.meta?.align || 'text-center';
-                    const flex = header.column.columnDef.meta?.flex || 1;
+              ))
+            ) : rankingTable.getRowModel().rows.length > 0 ? (
+              rankingTable.getRowModel().rows.map((row, index) => (
+                <div key={row.id} className={`table-row market-ranking-table-row ${index % 2 === 1 ? 'row-even' : ''}`}>
+                  {row.getVisibleCells().map((cell) => {
+                    const align = cell.column.columnDef.meta?.align || 'text-center';
+                    const flex = cell.column.columnDef.meta?.flex || 1;
                     const isRight = align === 'text-right';
 
                     return (
                       <div
-                        key={header.id}
-                        className={`table-header-cell ${align}`}
+                        key={cell.id}
+                        className={`table-cell ${align}`}
                         style={{
                           flex,
                           padding: '0 8px',
@@ -630,156 +660,59 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
                           justifyContent: isRight ? 'flex-end' : 'flex-start'
                         }}
                       >
-                        <div
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                            fontSize: 13,
-                            fontWeight: 700,
-                            letterSpacing: '0.5px'
-                          }}
-                        >
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                        </div>
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </div>
                     );
                   })}
                 </div>
-              ))}
-
-              <div className="market-ranking-list">
-                {rankingLoading ? (
-                  Array.from({ length: 10 }).map((_, index) => (
-                    <div
-                      key={`skeleton-ranking-${index}`}
-                      className={`table-row market-ranking-table-row ${index % 2 === 1 ? 'row-even' : ''}`}
-                    >
-                      <div
-                        className="table-cell text-left"
-                        style={{ flex: 2, padding: '0 8px', display: 'flex', alignItems: 'center' }}
-                      >
-                        <div className="w-full">
-                          <div className="flex items-center gap-1.5 mb-1.5 mt-0.5">
-                            <Skeleton className="size-4 rounded-full flex-shrink-0" />
-                            <Skeleton className="h-[18px] w-28 sm:w-40" />
-                          </div>
-                          <div className="flex items-center gap-2 pl-5">
-                            <Skeleton className="h-3 w-12" />
-                            <Skeleton className="h-[14px] w-8" />
-                          </div>
-                        </div>
-                      </div>
-                      <div
-                        className="table-cell text-right"
-                        style={{
-                          flex: 1,
-                          padding: '0 8px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'flex-end',
-                          justifyContent: 'center',
-                          gap: '4px'
-                        }}
-                      >
-                        <Skeleton className="h-[18px] w-14 sm:w-16" />
-                        <Skeleton className="h-3 w-10 sm:w-12" />
-                      </div>
-                      <div
-                        className="table-cell text-right"
-                        style={{
-                          flex: 1,
-                          padding: '0 8px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'flex-end',
-                          justifyContent: 'center'
-                        }}
-                      >
-                        <Skeleton className="h-[18px] w-14 sm:w-16" />
-                      </div>
-                    </div>
-                  ))
-                ) : rankingTable.getRowModel().rows.length > 0 ? (
-                  rankingTable.getRowModel().rows.map((row, index) => (
-                    <div
-                      key={row.id}
-                      className={`table-row market-ranking-table-row ${index % 2 === 1 ? 'row-even' : ''}`}
-                    >
-                      {row.getVisibleCells().map((cell) => {
-                        const align = cell.column.columnDef.meta?.align || 'text-center';
-                        const flex = cell.column.columnDef.meta?.flex || 1;
-                        const isRight = align === 'text-right';
-
-                        return (
-                          <div
-                            key={cell.id}
-                            className={`table-cell ${align}`}
-                            style={{
-                              flex,
-                              padding: '0 8px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: isRight ? 'flex-end' : 'flex-start'
-                            }}
-                          >
-                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))
-                ) : (
-                  <div className="py-8 text-center text-sm opacity-50">暂无数据</div>
-                )}
-              </div>
-
-              <div className="py-5 flex justify-end border-t border-[var(--border)] pr-4">
-                <Pagination className="justify-end w-auto mx-0">
-                  <PaginationContent>
-                    {[1, 2, 3, 4, 5].map((p) => (
-                      <PaginationItem key={p}>
-                        <PaginationLink
-                          onClick={(e) => {
-                            e.preventDefault();
-                            if (pageIndex !== p) {
-                              setPageIndex(p);
-                              // 延迟一点等待数据请求开始，同时滚动到表头
-                              setTimeout(() => {
-                                const el = document.getElementById('market-ranking-section');
-                                if (el) {
-                                  // 动态获取固定导航栏的高度，如果找不到则降级使用默认值 68px
-                                  const navbar = document.querySelector('.navbar');
-                                  const navHeight = navbar ? navbar.getBoundingClientRect().height : 68;
-
-                                  // 动态获取大盘指数组件的高度
-                                  const indexAccordion = document.querySelector('.market-index-accordion-root');
-                                  const indexHeight = indexAccordion
-                                    ? indexAccordion.getBoundingClientRect().height
-                                    : 0;
-
-                                  // 精准偏移：导航栏高度 + 指数组件高度 + 16px 的视觉留白
-                                  const offset = navHeight + indexHeight + 16;
-
-                                  const y = el.getBoundingClientRect().top + window.scrollY - offset;
-                                  window.scrollTo({ top: y, behavior: 'smooth' });
-                                }
-                              }, 10);
-                            }
-                          }}
-                          isActive={pageIndex === p}
-                        >
-                          {p}
-                        </PaginationLink>
-                      </PaginationItem>
-                    ))}
-                  </PaginationContent>
-                </Pagination>
-              </div>
-            </div>
+              ))
+            ) : (
+              <div className="py-8 text-center text-sm opacity-50">暂无数据</div>
+            )}
           </div>
-        </>
-      )}
+
+          <div className="py-5 flex justify-end border-t border-[var(--border)] pr-4">
+            <Pagination className="justify-end w-auto mx-0">
+              <PaginationContent>
+                {[1, 2, 3, 4, 5].map((p) => (
+                  <PaginationItem key={p}>
+                    <PaginationLink
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (pageIndex !== p) {
+                          setPageIndex(p);
+                          // 延迟一点等待数据请求开始，同时滚动到表头
+                          setTimeout(() => {
+                            const el = document.getElementById('market-ranking-section');
+                            if (el) {
+                              // 动态获取固定导航栏的高度，如果找不到则降级使用默认值 68px
+                              const navbar = document.querySelector('.navbar');
+                              const navHeight = navbar ? navbar.getBoundingClientRect().height : 68;
+
+                              // 动态获取大盘指数组件的高度
+                              const indexAccordion = document.querySelector('.market-index-accordion-root');
+                              const indexHeight = indexAccordion ? indexAccordion.getBoundingClientRect().height : 0;
+
+                              // 精准偏移：导航栏高度 + 指数组件高度 + 16px 的视觉留白
+                              const offset = navHeight + indexHeight + 16;
+
+                              const y = el.getBoundingClientRect().top + window.scrollY - offset;
+                              window.scrollTo({ top: y, behavior: 'smooth' });
+                            }
+                          }, 10);
+                        }
+                      }}
+                      isActive={pageIndex === p}
+                    >
+                      {p}
+                    </PaginationLink>
+                  </PaginationItem>
+                ))}
+              </PaginationContent>
+            </Pagination>
+          </div>
+        </div>
+      </div>
       {/* 基金详情弹框 */}
       {(() => {
         const mappedFund = detailFund
