@@ -1997,6 +1997,178 @@ export const submitFeedback = async (formData) => {
   return response.json();
 };
 
+// ============================================================================
+// StockFundamentals 批量微任务合并加载器 (DataLoader Pattern)
+// 单只股票基本面（PE/PB/PS/PEG/股息率/净利润同比等）
+// 接口：https://push2.eastmoney.com/api/qt/stock/get?secid=...&fields=...&fltt=2&invt=2
+// ============================================================================
+
+/**
+ * 将基金持仓里的股票代码（"600519" / "00700" / "AAPL"）转成 push2 secid。
+ * 无法识别或非可穿透市场返回 null。
+ * @param {string} stockCode
+ * @returns {string|null} 例："1.600519" / "116.00700" / "105.AAPL"
+ */
+const normalizeSecid = (stockCode) => {
+  const raw = String(stockCode || '').trim();
+  if (!raw) return null;
+  // A 股 6 位：6/9 开头沪市，0/3 开头深市，4/8 开头北证
+  if (/^\d{6}$/.test(raw)) {
+    if (raw.startsWith('6') || raw.startsWith('9')) return `1.${raw}`;
+    if (raw.startsWith('4') || raw.startsWith('8')) return `0.${raw}`;
+    if (raw.startsWith('0') || raw.startsWith('3')) return `0.${raw}`;
+    return null;
+  }
+  // 港股 4-5 位数字（含 "0700.HK" / "00700.HK"）
+  const mHk = raw.match(/^(\d{4,5})(?:\.HK)?$/i);
+  if (mHk) return `116.${mHk[1].padStart(5, '0')}`;
+  // 美股：纯字母 / 带 .O / .US / .N 后缀（AAPL / TSLA / BRK.B）
+  const mUs = raw.match(/^([A-Za-z]{1,10})(?:\.[A-Za-z]{1,6})?$/);
+  if (mUs) return `105.${mUs[1].toUpperCase()}`;
+  return null;
+};
+
+/**
+ * 从 secid 推导市场类型（A 股 / 港股 / 美股 / 未知），用于 UI 标注
+ * @param {string} secid
+ * @returns {'A'|'HK'|'US'|null}
+ */
+const secidMarket = (secid) => {
+  const s = String(secid || '');
+  if (/^1\.|^0\./.test(s)) return 'A';
+  if (/^116\./.test(s)) return 'HK';
+  if (/^105\./.test(s)) return 'US';
+  return null;
+};
+
+// 字段映射（push2 实测有效字段，参考贵州茅台 / 美的 / 腾讯的实拉响应）
+// PE 动 = f162，PB = f167，PS = f163，PEG = f191，净利同比 = f192，股息率 = f173
+const STOCK_FUNDAMENTALS_FIELDS = [
+  'f43', // 最新价
+  'f57', // 股票代码
+  'f58', // 股票名称
+  'f86', // 时间戳
+  'f116', // 总市值
+  'f48', // 流通市值
+  'f162', // PE-TTM
+  'f167', // PB
+  'f163', // PS
+  'f173', // 股息率
+  'f191', // PEG
+  'f192' // 净利润同比(%)
+].join(',');
+
+const STOCK_FUNDAMENTALS_BATCH_SIZE = 50;
+const STOCK_FUNDAMENTALS_STALE_TIME = ONE_DAY_MS; // 24h
+const STOCK_FUNDAMENTALS_TIMEOUT_MS = 8000;
+
+const stockFundamentalsInflight = new Map(); // secid -> { promise, resolve, reject }
+const stockFundamentalsQueue = new Set(); // Set(secid)
+let stockFundamentalsTimeout = null;
+
+/** 安全转 number：null / "" / "-" / 非数 都返回 null */
+const parseFundamentalField = (v) => {
+  if (v == null || v === '' || v === '-') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+const processStockFundamentalsQueue = async () => {
+  if (stockFundamentalsQueue.size === 0) return;
+  const currentQueue = Array.from(stockFundamentalsQueue);
+  stockFundamentalsQueue.clear();
+  stockFundamentalsTimeout = null;
+
+  const chunks = [];
+  for (let i = 0; i < currentQueue.length; i += STOCK_FUNDAMENTALS_BATCH_SIZE) {
+    chunks.push(currentQueue.slice(i, i + STOCK_FUNDAMENTALS_BATCH_SIZE));
+  }
+
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      // 单只串行 fetch（push2 单股接口最稳，避免 ulist 字段不全）
+      const results = await Promise.all(
+        chunk.map(async (secid) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), STOCK_FUNDAMENTALS_TIMEOUT_MS);
+          try {
+            const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secid)}&fields=${encodeURIComponent(STOCK_FUNDAMENTALS_FIELDS)}&fltt=2&invt=2&_=${Date.now()}`;
+            const res = await fetch(url, { signal: controller.signal });
+            clearTimeout(timer);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const json = await res.json();
+            const d = json?.data;
+            // f57 缺失或空视为无效
+            if (!d || !d.f57) throw new Error('empty data');
+            return {
+              secid,
+              market: secidMarket(secid),
+              code: String(d.f57).trim(),
+              name: d.f58 != null ? String(d.f58).trim() : null,
+              price: parseFundamentalField(d.f43),
+              totalMv: parseFundamentalField(d.f116),
+              freeMv: parseFundamentalField(d.f48),
+              pe: parseFundamentalField(d.f162),
+              pb: parseFundamentalField(d.f167),
+              ps: parseFundamentalField(d.f163),
+              dividendYield: parseFundamentalField(d.f173),
+              peg: parseFundamentalField(d.f191),
+              epsGrowth: parseFundamentalField(d.f192),
+              updateTime: d.f86 != null ? String(d.f86) : null,
+              fetchedAt: Date.now()
+            };
+          } catch (e) {
+            clearTimeout(timer);
+            return { secid, __error: e?.message || 'fetch failed' };
+          }
+        })
+      );
+
+      const qc = getQueryClient();
+      for (const r of results) {
+        const inflight = stockFundamentalsInflight.get(r.secid);
+        if (!inflight) continue;
+        if (r.__error) {
+          inflight.reject(new Error(r.__error));
+        } else {
+          qc.setQueryData(qk.stockFundamentals(r.secid), r, { staleTime: STOCK_FUNDAMENTALS_STALE_TIME });
+          inflight.resolve(r);
+        }
+        stockFundamentalsInflight.delete(r.secid);
+      }
+    })
+  );
+};
+
+/**
+ * 批量获取单只股票基本面（DataLoader 模式，secid 一只一只拉取，内部合并并发）
+ * @param {string} secid - 东财 secid 格式（"1.600519"）
+ * @returns {Promise<StockFundamental>}
+ */
+const fetchStockFundamentalsBatched = (secid) => {
+  const s = secid != null ? String(secid).trim() : '';
+  if (!s) return Promise.reject(new Error('secid 无效'));
+  if (typeof window === 'undefined' || typeof fetch === 'undefined') {
+    return Promise.reject(new Error('无浏览器环境'));
+  }
+  const qc = getQueryClient();
+  const cached = qc.getQueryData(qk.stockFundamentals(s));
+  if (cached !== undefined) return Promise.resolve(cached);
+  const existing = stockFundamentalsInflight.get(s);
+  if (existing) return existing.promise;
+  let resolveFn, rejectFn;
+  const promise = new Promise((resolve, reject) => {
+    resolveFn = resolve;
+    rejectFn = reject;
+  });
+  stockFundamentalsInflight.set(s, { promise, resolve: resolveFn, reject: rejectFn });
+  stockFundamentalsQueue.add(s);
+  if (stockFundamentalsQueue.size > 0 && !stockFundamentalsTimeout) {
+    stockFundamentalsTimeout = setTimeout(processStockFundamentalsQueue, 0);
+  }
+  return promise;
+};
+
 const PINGZHONGDATA_GLOBAL_KEYS = [
   'ishb',
   'fS_name',
@@ -2465,4 +2637,199 @@ export const fetchOcrDailyRemaining = async (userId, maxLimit = 5) => {
   } catch {
     return { remaining: maxLimit, used: 0, max: maxLimit };
   }
+};
+
+// ============================================================================
+// 基金持仓穿透估值（基金级估值倍数 = 持仓股加权）
+// ============================================================================
+
+/**
+ * 解析 weight 字符串（"5.23%"）成数字百分比（5.23）
+ * @param {string|number|null} weight
+ * @returns {number} 未识别返回 0
+ */
+const parseWeightPercent = (weight) => {
+  if (weight == null) return 0;
+  const s = String(weight).replace('%', '').trim();
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * 基金穿透估值结果
+ * @typedef {object} HoldingsValuationResult
+ * @property {string} fundCode
+ * @property {string|null} holdingsReportDate
+ * @property {boolean} holdingsIsLastQuarter
+ * @property {number} coveredWeight - 已穿透部分权重合计（%，已归一化到 100%）
+ * @property {number} skippedWeight - 未穿透部分权重合计（%，含港美股/fetch 失败/未披露剩余）
+ * @property {number} uncoveredWeight - 未披露剩余权重（前 10 没覆盖到的部分）
+ * @property {Array<{code, name, weight, reason: 'foreign'|'fetch_failed'}>} skippedDetails
+ * @property {{
+ *   pe: number|null, pb: number|null, ps: number|null,
+ *   peg: number|null, epsGrowth: number|null, dividendYield: number|null
+ * }|null} metrics
+ * @property {Array<{code, name, weight, secid, market, pe, pb, ps, peg, epsGrowth, dividendYield}>} perStock
+ * @property {string|null} updateTime - 数据获取时间
+ */
+
+/**
+ * 计算基金持仓穿透估值
+ *
+ * 算法（用户指定）：
+ *   PE  →  E/P 加权倒数法：基金 E/P = Σ(w_i × 1/PE_i)，基金 PE = 1/E/P
+ *   其他指标 → 直接加权：基金 metric = Σ(w_i × metric_i)
+ *
+ * @param {string} fundCode - 6 位基金代码
+ * @returns {Promise<HoldingsValuationResult>}
+ */
+export const fetchHoldingsValuation = async (fundCode) => {
+  const c = String(fundCode || '').trim();
+  const empty = (extra = {}) => ({
+    fundCode: c,
+    holdingsReportDate: null,
+    holdingsIsLastQuarter: false,
+    coveredWeight: 0,
+    skippedWeight: 0,
+    uncoveredWeight: 0,
+    skippedDetails: [],
+    metrics: null,
+    perStock: [],
+    updateTime: null,
+    ...extra
+  });
+
+  if (!c) return empty();
+
+  // 1. 拿持仓（已带缓存）
+  let holdingsResp;
+  try {
+    holdingsResp = await fetchFundHoldings(c);
+  } catch (e) {
+    return empty();
+  }
+  const { holdings, holdingsReportDate, holdingsIsLastQuarter } = holdingsResp;
+  if (!isArray(holdings) || holdings.length === 0) {
+    return empty({ holdingsReportDate, holdingsIsLastQuarter });
+  }
+
+  // 2. 解析每只持仓：weightNum + secid + market
+  const parsed = holdings.map((h) => {
+    const weightNum = parseWeightPercent(h.weight);
+    const secid = normalizeSecid(h.code);
+    const market = secidMarket(secid);
+    return { ...h, weightNum, secid, market };
+  });
+  const disclosedSum = parsed.reduce((acc, x) => acc + x.weightNum, 0);
+  const uncoveredWeight = disclosedSum < 99.5 ? Math.max(0, 100 - disclosedSum) : 0;
+
+  // 3. 仅 A 股走 fetch（港美股直接归入 skipped）
+  const aStockTargets = parsed.filter((x) => x.secid && x.market === 'A');
+  const fundamentalsResults = await Promise.allSettled(
+    aStockTargets.map((x) => fetchStockFundamentalsBatched(x.secid))
+  );
+
+  const fundBySecid = new Map();
+  const skippedDetails = [];
+  aStockTargets.forEach((x, idx) => {
+    const r = fundamentalsResults[idx];
+    if (r.status === 'rejected' || !r.value || r.value.__error) {
+      skippedDetails.push({ code: x.code, name: x.name, weight: x.weightNum, reason: 'fetch_failed' });
+      return;
+    }
+    fundBySecid.set(x.secid, r.value);
+  });
+
+  // 港美股全部计入 skipped
+  for (const x of parsed) {
+    if (x.secid && (x.market === 'HK' || x.market === 'US')) {
+      skippedDetails.push({ code: x.code, name: x.name, weight: x.weightNum, reason: 'foreign' });
+    } else if (!x.secid) {
+      skippedDetails.push({ code: x.code, name: x.name, weight: x.weightNum, reason: 'foreign' });
+    }
+  }
+
+  // 4. 用「已穿透 A 股」做归一化（权重合计归一到 100%）
+  const covered = aStockTargets.filter((x) => fundBySecid.has(x.secid));
+  const coveredRawSum = covered.reduce((acc, x) => acc + x.weightNum, 0);
+  const coveredWeight = coveredRawSum; // 仍保留为原始 % 数值，便于 UI 显示
+  const skippedWeight = disclosedSum - coveredRawSum + uncoveredWeight;
+
+  if (covered.length === 0 || coveredRawSum === 0) {
+    return {
+      fundCode: c,
+      holdingsReportDate,
+      holdingsIsLastQuarter,
+      coveredWeight: 0,
+      skippedWeight,
+      uncoveredWeight,
+      skippedDetails,
+      metrics: null,
+      perStock: [],
+      updateTime: null
+    };
+  }
+
+  // 5. 加权计算（用归一化权重）
+  const normSum = coveredRawSum; // 原始百分比合计，下面 w = weightNum / normSum 归一到 1
+  let epSum = 0;
+  let pbSum = 0,
+    psSum = 0,
+    pegSum = 0,
+    epsGrowthSum = 0,
+    dividendSum = 0;
+  const perStock = [];
+  let latestUpdateTime = null;
+
+  for (const x of covered) {
+    const f = fundBySecid.get(x.secid);
+    const w = x.weightNum / normSum; // 归一化到 0..1
+
+    if (f.pe != null && f.pe > 0) epSum += w / f.pe;
+    if (f.pb != null) pbSum += w * f.pb;
+    if (f.ps != null) psSum += w * f.ps;
+    if (f.peg != null) pegSum += w * f.peg;
+    if (f.epsGrowth != null) epsGrowthSum += w * f.epsGrowth;
+    if (f.dividendYield != null) dividendSum += w * f.dividendYield;
+
+    if (f.updateTime && (!latestUpdateTime || Number(f.updateTime) > Number(latestUpdateTime))) {
+      latestUpdateTime = f.updateTime;
+    }
+
+    perStock.push({
+      code: x.code,
+      name: x.name,
+      weight: x.weightNum,
+      secid: x.secid,
+      market: 'A',
+      pe: f.pe,
+      pb: f.pb,
+      ps: f.ps,
+      peg: f.peg,
+      epsGrowth: f.epsGrowth,
+      dividendYield: f.dividendYield
+    });
+  }
+
+  const metrics = {
+    pe: epSum > 0 ? 1 / epSum : null,
+    pb: pbSum,
+    ps: psSum,
+    peg: pegSum,
+    epsGrowth: epsGrowthSum,
+    dividendYield: dividendSum
+  };
+
+  return {
+    fundCode: c,
+    holdingsReportDate,
+    holdingsIsLastQuarter,
+    coveredWeight,
+    skippedWeight,
+    uncoveredWeight,
+    skippedDetails,
+    metrics,
+    perStock,
+    updateTime: latestUpdateTime != null ? String(latestUpdateTime) : null
+  };
 };

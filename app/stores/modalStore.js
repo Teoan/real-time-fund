@@ -21,7 +21,8 @@ const DEFAULTS = {
   holdingMigrateDialog: { open: false, code: null, name: '', targetGroupId: null },
   cloudConfigModal: { open: false, userId: null, type: null, cloudData: null },
   deviceConflictModal: { open: false, message: '', userId: null, payload: null, isPartial: false },
-  successModal: { open: false, message: '' }
+  successModal: { open: false, message: '' },
+  holdingsValuationModal: { open: false, fundCode: null }
 };
 
 const getClosedModalState = () => ({
@@ -60,6 +61,7 @@ const getClosedModalState = () => ({
   cloudConfigModal: { ...DEFAULTS.cloudConfigModal },
   deviceConflictModal: { ...DEFAULTS.deviceConflictModal },
   successModal: { ...DEFAULTS.successModal },
+  holdingsValuationModal: { ...DEFAULTS.holdingsValuationModal },
   scanModalOpen: false,
   scanConfirmModalOpen: false,
   isScanning: false,
@@ -118,6 +120,7 @@ export const useModalStore = create((set, get) => ({
   cloudConfigModal: { ...DEFAULTS.cloudConfigModal },
   deviceConflictModal: { ...DEFAULTS.deviceConflictModal },
   successModal: { ...DEFAULTS.successModal },
+  holdingsValuationModal: { ...DEFAULTS.holdingsValuationModal },
 
   // ---- Scan modals (migrated from useScanImport) ----
   scanModalOpen: false,

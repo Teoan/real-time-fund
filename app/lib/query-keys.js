@@ -51,3 +51,9 @@ export const isQdiiFund = (fundCode) => ['isQdiiFund', String(fundCode).trim()];
 
 /** @param {string} fundCode - 天天基金 FundValuationLast 批量估值接口缓存键 */
 export const fundValuationLast = (fundCode) => ['fundValuationLast', String(fundCode).trim()];
+
+/** @param {string} secid - 东方财富 push2 单股基本面缓存键（"1.600519"） */
+export const stockFundamentals = (secid) => ['stockFundamentals', String(secid || '').trim()];
+
+/** @param {string} fundCode - 基金持仓穿透估值聚合结果缓存键 */
+export const holdingsValuation = (fundCode) => ['holdingsValuation', String(fundCode || '').trim()];

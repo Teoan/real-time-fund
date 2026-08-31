@@ -7,7 +7,7 @@ import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { isArray, isNumber, isObject, isString } from 'lodash';
-import { PlusCircle } from 'lucide-react';
+import { PlusCircle, LineChart } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from '@/components/ui/empty';
 import { Badge } from '@/components/ui/badge';
@@ -209,6 +209,7 @@ export default function Index({
   onFundTagsClick,
   fundExtraData,
   onDataSourceClick,
+  onOpenHoldingsValuation,
   groupTotalHoldingAmount = 0,
   fallbackFund,
   hasDca = false,
@@ -919,7 +920,42 @@ export default function Index({
                   <span className="muted">重仓股票：</span>
                   <span style={{ color: 'var(--foreground)' }}>{top10WeightSum.toFixed(2)}%</span>
                 </div>
-                <span className="muted">涨跌幅 / 占比</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {onOpenHoldingsValuation && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          style={{
+                            width: 24,
+                            height: 24,
+                            cursor: 'pointer',
+                            padding: 0,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--muted)',
+                            borderRadius: 6
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenHoldingsValuation(f);
+                          }}
+                          aria-label="查看持仓穿透估值"
+                        >
+                          <LineChart width="14" height="14" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>查看持仓穿透估值</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                  <span className="muted">涨跌幅 / 占比</span>
+                </div>
               </div>
               <div className="list">
                 {topHoldings.holdings.map((h, idx) => (
@@ -996,6 +1032,40 @@ export default function Index({
                       }}
                     />
                   </div>
+                  {onOpenHoldingsValuation && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          style={{
+                            width: 24,
+                            height: 24,
+                            cursor: 'pointer',
+                            padding: 0,
+                            marginLeft: 'auto',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--muted)',
+                            borderRadius: 6
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenHoldingsValuation(f);
+                          }}
+                          aria-label="查看持仓穿透估值"
+                        >
+                          <LineChart width="14" height="14" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>查看持仓穿透估值</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
                 </div>
               </div>
               <AnimatePresence>

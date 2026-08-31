@@ -23,6 +23,7 @@ const ScanProgressModal = dynamic(() => import('./ScanProgressModal'), { ssr: fa
 const AddHistoryModal = dynamic(() => import('./AddHistoryModal'), { ssr: false });
 const AllSectorsModal = dynamic(() => import('./AllSectorsModal'), { ssr: false });
 const DividendMethodModal = dynamic(() => import('./DividendMethodModal'), { ssr: false });
+const HoldingsValuationModal = dynamic(() => import('./HoldingsValuationModal'), { ssr: false });
 
 // 高频组件：同步加载
 import ConfirmModal from './ConfirmModal';
@@ -105,6 +106,7 @@ function ModalsLayerContent({ callbacksRef }) {
   const selectFundSingleModal = useModalStore((s) => s.selectFundSingleModal);
   const selectHoldingGroupModal = useModalStore((s) => s.selectHoldingGroupModal);
   const dataSourceModal = useModalStore((s) => s.dataSourceModal);
+  const holdingsValuationModal = useModalStore((s) => s.holdingsValuationModal);
   const dcaModal = useModalStore((s) => s.dcaModal);
   const clearConfirm = useModalStore((s) => s.clearConfirm);
   const holdingMigrateDialog = useModalStore((s) => s.holdingMigrateDialog);
@@ -161,6 +163,8 @@ function ModalsLayerContent({ callbacksRef }) {
   const setSelectHoldingGroupModal = (v) =>
     _ms({ selectHoldingGroupModal: isFunction(v) ? v(_gs().selectHoldingGroupModal) : v });
   const setDataSourceModal = (v) => _ms({ dataSourceModal: isFunction(v) ? v(_gs().dataSourceModal) : v });
+  const setHoldingsValuationModal = (v) =>
+    _ms({ holdingsValuationModal: isFunction(v) ? v(_gs().holdingsValuationModal) : v });
   const setDcaModal = (v) => _ms({ dcaModal: isFunction(v) ? v(_gs().dcaModal) : v });
   const setClearConfirm = (v) => _ms({ clearConfirm: isFunction(v) ? v(_gs().clearConfirm) : v });
   const setHoldingMigrateDialog = (v) =>
@@ -942,6 +946,17 @@ function ModalsLayerContent({ callbacksRef }) {
       {/* ===== Modal: 排序个性化设置 ===== */}
       <AnimatePresence>
         {sortSettingOpen && <SortSettingModal open={sortSettingOpen} onClose={() => setSortSettingOpen(false)} />}
+      </AnimatePresence>
+
+      {/* ===== Modal: 持仓穿透估值 ===== */}
+      <AnimatePresence>
+        {holdingsValuationModal.open && holdingsValuationModal.fundCode && (
+          <HoldingsValuationModal
+            fundCode={holdingsValuationModal.fundCode}
+            fundName={holdingsValuationModal.fundName}
+            onClose={() => setHoldingsValuationModal({ open: false, fundCode: null, fundName: null })}
+          />
+        )}
       </AnimatePresence>
     </>
   );
