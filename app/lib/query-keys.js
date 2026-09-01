@@ -57,3 +57,36 @@ export const stockFundamentals = (secid) => ['stockFundamentals', String(secid |
 
 /** @param {string} fundCode - 基金持仓穿透估值聚合结果缓存键 */
 export const holdingsValuation = (fundCode) => ['holdingsValuation', String(fundCode || '').trim()];
+
+// ============================================================================
+// TopK Provider 查询键
+// ============================================================================
+
+/** @param {string} keyword */
+export const topkSearchFund = (keyword) => ['topk', 'searchFund', String(keyword || '').trim()];
+
+/** @param {string} code */
+export const topkFundDetail = (code) => ['topk', 'fundDetail', String(code).trim()];
+
+/** @param {string} code */
+export const topkFundLatestNav = (code) => ['topk', 'fundLatestNav', String(code).trim()];
+
+/** @param {string} code @param {string} sdate @param {string} edate */
+export const topkFundNavHistory = (code, sdate, edate) => [
+  'topk',
+  'fundNavHistory',
+  String(code).trim(),
+  String(sdate || ''),
+  String(edate || '')
+];
+
+/** @param {string} code @param {string} yearOrLatest */
+export const topkFundHoldings = (code, yearOrLatest) => [
+  'topk',
+  'fundHoldings',
+  String(code).trim(),
+  String(yearOrLatest || 'latest')
+];
+
+/** TopK 健康检查（短 TTL） */
+export const topkHealth = () => ['topk', 'health'];
