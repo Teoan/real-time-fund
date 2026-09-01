@@ -130,4 +130,63 @@ export const mapOverviewRows = (rows) => {
   return out;
 };
 
-export const __test__ = { toFiniteNumber, toIsoDate, pickString, extractReportDate };
+/**
+ * 解析 ISO 时间戳（"2018-01-02T00:00:00.000"）为毫秒时间戳。
+ */
+const parseAkShareTimestamp = (raw) => {
+  const s = pickString(raw);
+  if (!s) return null;
+  const d = new Date(s);
+  return Number.isFinite(d.getTime()) ? d.getTime() : null;
+};
+
+/**
+ * stock_value_em 整行 → 单股估值（保留最近交易日一行）
+ *
+ * 输入是历史序列（最多约 2100 条），返回结构与项目内 fetchStockFundamentalsBatched
+ * 的 StockFundamental 保持一致：
+ *   { secid, market, code, name, price, totalMv, freeMv,
+ *     pe, pb, ps, dividendYield, peg, epsGrowth, updateTime, fetchedAt }
+ *
+ * 字段映射（项目字段 ← AKShare 列名）：
+ *   pe             ← PE(TTM)
+ *   pb             ← 市净率
+ *   ps             ← 市销率   （项目沿用 push2 f163 命名）
+ *   peg            ← PEG值
+ *   dividendYield  ← null     （TopK/AKShare 暂无可用接口）
+ *   epsGrowth      ← null     （TopK/AKShare 暂无可用接口）
+ *   price          ← 当日收盘价
+ *   totalMv        ← 总市值
+ *   freeMv         ← 流通市值
+ *   updateTime     ← 数据日期（毫秒时间戳）
+ */
+export const mapStockFundamentalLatest = (rows, ctx = {}) => {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const sorted = [...rows].sort((a, b) => {
+    const ta = parseAkShareTimestamp(a['数据日期']) || 0;
+    const tb = parseAkShareTimestamp(b['数据日期']) || 0;
+    return tb - ta;
+  });
+  const row = sorted[0];
+  if (!row || typeof row !== 'object') return null;
+
+  return {
+    secid: pickString(ctx.secid) || null,
+    market: pickString(ctx.market) || 'A',
+    code: pickString(ctx.code) || pickString(row['股票代码']) || null,
+    name: pickString(ctx.name) || pickString(row['股票名称']) || null,
+    price: toFiniteNumber(row['当日收盘价']),
+    totalMv: toFiniteNumber(row['总市值']),
+    freeMv: toFiniteNumber(row['流通市值']),
+    pe: toFiniteNumber(row['PE(TTM)']),
+    pb: toFiniteNumber(row['市净率']),
+    ps: toFiniteNumber(row['市销率']),
+    dividendYield: null,
+    peg: toFiniteNumber(row['PEG值']),
+    epsGrowth: null,
+    updateTime: parseAkShareTimestamp(row['数据日期']),
+    fetchedAt: Date.now()
+  };
+};
+
+export const __test__ = { toFiniteNumber, toIsoDate, pickString, extractReportDate, parseAkShareTimestamp };

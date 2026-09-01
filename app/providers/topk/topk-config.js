@@ -63,6 +63,8 @@ export const TOPK_ENDPOINTS = Object.freeze({
   getFundDividend: 'fund_fh_em',
   getFundRank: 'fund_open_fund_rank_em',
   getEtfSpot: 'fund_etf_spot_em',
+  // 单股估值（用于持仓穿透）：AKShare stock_value_em，单只 A 股 6 位代码
+  getStockFundamentals: 'stock_value_em',
   healthCheck: 'fund_open_fund_daily_em'
 });
 
@@ -71,6 +73,7 @@ export const TOPK_ENDPOINTS = Object.freeze({
  *  - 基础信息 1 天
  *  - 历史净值 1 天
  *  - 最新净值/估值 5 分钟（基于现有 getNetValueStaleTime 行为）
+ *  - 单股估值指标 24h（与项目内 fetchStockFundamentalsBatched 对齐）
  */
 export const TOPK_CACHE_TTL = Object.freeze({
   searchFund: ONE_DAY_MS,
@@ -83,6 +86,7 @@ export const TOPK_CACHE_TTL = Object.freeze({
   getFundDividend: ONE_DAY_MS,
   getFundRank: 60 * 60 * 1000,
   getEtfSpot: 60 * 1000,
+  getStockFundamentals: ONE_DAY_MS,
   healthCheck: 5 * 60 * 1000
 });
 

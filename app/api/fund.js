@@ -8,6 +8,8 @@ import { getQueryClient } from '../lib/get-query-client';
 import * as qk from '../lib/query-keys';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { isTradingDay } from '../lib/tradingCalendar';
+import { TOPK_PROVIDER } from '@/app/providers/topk';
+import { useSettingsStore } from '../stores/settingsStore';
 
 import { DEFAULT_TZ, ONE_DAY_MS } from '@/app/constants';
 
@@ -2142,6 +2144,12 @@ const processStockFundamentalsQueue = async () => {
 
 /**
  * 批量获取单只股票基本面（DataLoader 模式，secid 一只一只拉取，内部合并并发）
+ *
+ * 数据源路由：
+ *   - 当 settings.topkStockFundamentalsEnabled=true 且 secid 解析为 A 股时，
+ *     走 TopK (AKShare stock_value_em)。TopK 不支持港美股，港美股仍走原东财 push2 路径。
+ *   - 否则保持原东财 push2 单股接口实现（向后兼容，默认行为）。
+ *
  * @param {string} secid - 东财 secid 格式（"1.600519"）
  * @returns {Promise<StockFundamental>}
  */
@@ -2151,6 +2159,18 @@ const fetchStockFundamentalsBatched = (secid) => {
   if (typeof window === 'undefined' || typeof fetch === 'undefined') {
     return Promise.reject(new Error('无浏览器环境'));
   }
+
+  // 从 secid 推导 6 位股票代码与市场，决定是否走 TopK
+  // secid 形如 "1.600519" / "0.000001" / "116.00700" / "105.AAPL"
+  const dotIdx = s.indexOf('.');
+  const tail = dotIdx >= 0 ? s.slice(dotIdx + 1) : s;
+  const isAStock = /^\d{6}$/.test(tail);
+  const topkEnabled = isAStock && useSettingsStore.getState().topkStockFundamentalsEnabled === true;
+
+  if (topkEnabled) {
+    return topkFetchStockFundamentals(s, tail);
+  }
+
   const qc = getQueryClient();
   const cached = qc.getQueryData(qk.stockFundamentals(s));
   if (cached !== undefined) return Promise.resolve(cached);
@@ -2167,6 +2187,28 @@ const fetchStockFundamentalsBatched = (secid) => {
     stockFundamentalsTimeout = setTimeout(processStockFundamentalsQueue, 0);
   }
   return promise;
+};
+
+/**
+ * 通过 TopK Provider 拉取 A 股单股估值，复用 push2 同名缓存键 (stockFundamentals)。
+ * 不另起 DataLoader —— TopK Provider 内部已带缓存 (24h staleTime) 与并发控制。
+ */
+const topkFetchStockFundamentals = async (secid, symbol6) => {
+  const qc = getQueryClient();
+  const cached = qc.getQueryData(qk.stockFundamentals(secid));
+  if (cached !== undefined) return cached;
+
+  try {
+    const result = await TOPK_PROVIDER.getStockFundamentals(symbol6, {
+      secid,
+      market: 'A',
+      code: symbol6
+    });
+    qc.setQueryData(qk.stockFundamentals(secid), result, { staleTime: ONE_DAY_MS });
+    return result;
+  } catch (e) {
+    throw e instanceof Error ? e : new Error(String(e?.message || e));
+  }
 };
 
 const PINGZHONGDATA_GLOBAL_KEYS = [

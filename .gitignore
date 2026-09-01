@@ -96,3 +96,4 @@ cli/
 /.mcp.json
 /.codex/
 /jgb-cli/
+.commandcode/**

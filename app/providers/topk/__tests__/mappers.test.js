@@ -18,6 +18,7 @@ import {
   mapNavHistoryRow,
   mapOverviewRows,
   mapSearchFundRow,
+  mapStockFundamentalLatest,
   __test__ as mappersInternals
 } from '../topk-mappers.js';
 
@@ -156,5 +157,81 @@ describe('mappers internals', () => {
     assert.equal(mappersInternals.toFiniteNumber(Infinity), null);
     assert.equal(mappersInternals.toFiniteNumber('abc'), null);
     assert.equal(mappersInternals.toFiniteNumber('1.23'), 1.23);
+  });
+});
+
+describe('mapStockFundamentalLatest', () => {
+  it('取最新交易日（按数据日期降序）', () => {
+    const rows = [
+      {
+        数据日期: '2024-06-03T00:00:00.000',
+        当日收盘价: 100,
+        总市值: 1000000000,
+        流通市值: 800000000,
+        'PE(TTM)': 15.5,
+        市净率: 2.3,
+        市销率: 1.8,
+        PEG值: 1.2
+      },
+      {
+        数据日期: '2024-06-04T00:00:00.000',
+        当日收盘价: 102,
+        总市值: 1020000000,
+        流通市值: 820000000,
+        'PE(TTM)': 15.8,
+        市净率: 2.35,
+        市销率: 1.84,
+        PEG值: 1.22
+      }
+    ];
+    const out = mapStockFundamentalLatest(rows, { secid: '1.600519', market: 'A', code: '600519' });
+    assert.equal(out.secid, '1.600519');
+    assert.equal(out.market, 'A');
+    assert.equal(out.code, '600519');
+    assert.equal(out.price, 102);
+    assert.equal(out.pe, 15.8);
+    assert.equal(out.pb, 2.35);
+    assert.equal(out.ps, 1.84);
+    assert.equal(out.peg, 1.22);
+    assert.equal(out.dividendYield, null);
+    assert.equal(out.epsGrowth, null);
+    assert.equal(typeof out.fetchedAt, 'number');
+    assert.equal(typeof out.updateTime, 'number');
+    assert.ok(out.updateTime > Date.parse('2024-06-03'));
+  });
+
+  it('空数组返回 null', () => {
+    assert.equal(mapStockFundamentalLatest([], {}), null);
+    assert.equal(mapStockFundamentalLatest(null, {}), null);
+  });
+
+  it('无效日期行被忽略（取有效行最新一条）', () => {
+    const rows = [
+      { 数据日期: 'bad', 'PE(TTM)': 99 },
+      { 数据日期: '2024-06-01T00:00:00.000', 'PE(TTM)': 10 }
+    ];
+    const out = mapStockFundamentalLatest(rows, {});
+    assert.equal(out.pe, 10);
+  });
+
+  it('NaN/NaT 数字字段归一为 null', () => {
+    const rows = [
+      {
+        数据日期: '2024-06-01T00:00:00.000',
+        当日收盘价: NaN,
+        总市值: 'NaN',
+        'PE(TTM)': 'NaT'
+      }
+    ];
+    const out = mapStockFundamentalLatest(rows, {});
+    assert.equal(out.price, null);
+    assert.equal(out.totalMv, null);
+    assert.equal(out.pe, null);
+  });
+
+  it('不传 ctx 时 market 默认为 A', () => {
+    const out = mapStockFundamentalLatest([{ 数据日期: '2024-06-01T00:00:00.000', 'PE(TTM)': 12 }], {});
+    assert.equal(out.market, 'A');
+    assert.equal(out.secid, null);
   });
 });

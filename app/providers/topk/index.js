@@ -25,4 +25,12 @@ export {
 
 export { createTopKClient } from './topk-client.js';
 
-export { createTopKProvider, defaultTopKProvider } from './topk-provider.js';
+export {
+  mapSearchFundRow,
+  mapNavHistoryRow,
+  mapHoldingRow,
+  mapOverviewRows,
+  mapStockFundamentalLatest
+} from './topk-mappers.js';
+
+export { createTopKProvider, defaultTopKProvider, TOPK_PROVIDER } from './topk-provider.js';

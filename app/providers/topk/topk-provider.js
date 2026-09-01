@@ -15,7 +15,13 @@
 import { FundNotFoundError, TopKError, TopKUnsupportedError } from './topk-errors.js';
 import { TOPK_CACHE_TTL, TOPK_ENDPOINTS, TOPK_METADATA } from './topk-config.js';
 import { TOPK_CAPABILITIES, isCapabilitySupported, mergeCapabilities } from './topk-capabilities.js';
-import { mapHoldingRow, mapNavHistoryRow, mapOverviewRows, mapSearchFundRow } from './topk-mappers.js';
+import {
+  mapHoldingRow,
+  mapNavHistoryRow,
+  mapOverviewRows,
+  mapSearchFundRow,
+  mapStockFundamentalLatest
+} from './topk-mappers.js';
 import { createTopKClient } from './topk-client.js';
 
 /**
@@ -231,6 +237,57 @@ export function createTopKProvider(options = {}) {
     return Object.fromEntries(results);
   };
 
+  /**
+   * 单股估值指标（A 股 6 位代码）。用于持仓穿透估值。
+   *
+   * 注意：
+   * - AKShare stock_value_em 是历史序列接口，返回约 2100 条日数据
+   * - 单次只接受一只股票（不支持 batch），每只股票一次 HTTP 调用
+   * - 股息率 / 净利润同比 TopK 暂无对应接口，固定返回 null（不影响算法）
+   * - secid 由调用方传入（业务层从 push2 secid 推导），用于返回值填充
+   *
+   * @param {string} symbol - A 股 6 位代码，如 "600519"
+   * @param {{ secid?: string, market?: 'A'|'HK'|'US', code?: string, name?: string }} [ctx]
+   * @returns {Promise<StockFundamental|null>}
+   */
+  const getStockFundamentals = async (symbol, ctx = {}) => {
+    if (!isCapabilitySupported(capabilities, 'getStockFundamentals')) {
+      throw new TopKUnsupportedError('TopK Provider 未启用 getStockFundamentals');
+    }
+    const s = String(symbol || '').trim();
+    if (!/^\d{6}$/.test(s)) {
+      throw new TopKError(`stock_value_em 仅接受 A 股 6 位代码: ${symbol}`);
+    }
+    return fetchCached(
+      ['stockFundamentals', s],
+      async () => {
+        const rows = await client.call(TOPK_ENDPOINTS.getStockFundamentals, { symbol: s });
+        const mapped = mapStockFundamentalLatest(rows, { ...ctx, code: s });
+        if (!mapped) throw new FundNotFoundError(`TopK 未返回单股估值: ${s}`);
+        return mapped;
+      },
+      TOPK_CACHE_TTL.getStockFundamentals
+    );
+  };
+
+  /**
+   * 批量获取单股估值（DataLoader 模式，并发受控）。
+   * @param {Array<{ symbol: string, secid?: string, market?: 'A'|'HK'|'US', code?: string, name?: string }>} targets
+   * @returns {Promise<Record<string, StockFundamental|null>>}  key = symbol
+   */
+  const getStockFundamentalsBatch = async (targets) => {
+    if (!Array.isArray(targets) || targets.length === 0) return {};
+    const entries = await asyncPool(concurrency, targets, async (t) => {
+      try {
+        const v = await getStockFundamentals(t.symbol, t);
+        return [t.symbol, v];
+      } catch (e) {
+        return [t.symbol, null];
+      }
+    });
+    return Object.fromEntries(entries);
+  };
+
   const healthCheck = async () => client.healthCheck();
 
   return {
@@ -242,6 +299,8 @@ export function createTopKProvider(options = {}) {
     getFundNavHistory,
     getFundHoldings,
     getFundsLatestNavBatch,
+    getStockFundamentals,
+    getStockFundamentalsBatch,
     healthCheck
   };
 }
@@ -282,3 +341,18 @@ export async function createTopKProviderForApp(options = {}) {
 }
 
 export const defaultTopKProvider = createTopKProvider();
+
+/**
+ * 业务层统一调用入口（推荐 import）。
+ *
+ * 与 defaultTopKProvider 等价；默认所有能力均关闭。
+ * 如需启用某个能力，请通过 settingsStore 增加配置项，并在调用方
+ * （如 app/api/fund.js 的 fetchStockFundamentalsBatched）中根据能力
+ * 是否启用决定走 TopK 还是 fallback 到原东财 push2 实现。
+ *
+ * 启用方式（生产）：
+ *   const provider = createTopKProvider({
+ *     capabilities: { getStockFundamentals: true }
+ *   });
+ */
+export const TOPK_PROVIDER = defaultTopKProvider;

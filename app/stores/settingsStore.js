@@ -16,6 +16,9 @@ export const useSettingsStore = create((set) => ({
   showGroupDropdownPc: false,
   showGroupDropdownMobile: false,
   isGroupSummarySticky: false,
+  // TopK 数据源：A 股单股估值走 TopK (AKShare stock_value_em) 而非东财 push2。
+  // 默认 false —— 不启用时持仓穿透维持原东财 push2 行为。
+  topkStockFundamentalsEnabled: false,
 
   setTempSeconds: (val) => set({ tempSeconds: isFunction(val) ? val(useSettingsStore.getState().tempSeconds) : val }),
   setContainerWidth: (val) =>
@@ -50,6 +53,12 @@ export const useSettingsStore = create((set) => ({
     set({
       isGroupSummarySticky: isFunction(val) ? val(useSettingsStore.getState().isGroupSummarySticky) : val
     }),
+  setTopkStockFundamentalsEnabled: (val) =>
+    set({
+      topkStockFundamentalsEnabled: isFunction(val)
+        ? val(useSettingsStore.getState().topkStockFundamentalsEnabled)
+        : val
+    }),
 
   /**
    * 从 customSettings 解析并同步配置到 Zustand 状态
@@ -81,6 +90,8 @@ export const useSettingsStore = create((set) => ({
       if (isBoolean(customSettings.showGroupDropdownPc)) patch.showGroupDropdownPc = customSettings.showGroupDropdownPc;
       if (isBoolean(customSettings.showGroupDropdownMobile))
         patch.showGroupDropdownMobile = customSettings.showGroupDropdownMobile;
+      if (isBoolean(customSettings.topkStockFundamentalsEnabled))
+        patch.topkStockFundamentalsEnabled = customSettings.topkStockFundamentalsEnabled;
 
       if (Object.keys(patch).length > 0) {
         set(patch);

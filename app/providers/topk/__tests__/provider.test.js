@@ -253,3 +253,73 @@ describe('TopK Provider - getFundHoldings', () => {
     );
   });
 });
+
+describe('TopK Provider - getStockFundamentals', () => {
+  it('正常行 → 映射到标准 StockFundamental 结构', async () => {
+    await withMockFetch(
+      async () =>
+        okJson({
+          success: true,
+          data: [
+            {
+              数据日期: '2024-06-03T00:00:00.000',
+              当日收盘价: 100,
+              总市值: 1000000000,
+              流通市值: 800000000,
+              'PE(TTM)': 15.5,
+              市净率: 2.3,
+              市销率: 1.8,
+              PEG值: 1.2
+            }
+          ]
+        }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockFundamentals: true }
+        });
+        const out = await provider.getStockFundamentals('600519', {
+          secid: '1.600519',
+          market: 'A',
+          code: '600519'
+        });
+        assert.equal(out.secid, '1.600519');
+        assert.equal(out.code, '600519');
+        assert.equal(out.pe, 15.5);
+        assert.equal(out.pb, 2.3);
+        assert.equal(out.ps, 1.8);
+        assert.equal(out.peg, 1.2);
+        assert.equal(out.dividendYield, null);
+        assert.equal(out.epsGrowth, null);
+      }
+    );
+  });
+
+  it('非 6 位代码 → TopKError', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockFundamentals: true }
+    });
+    await assert.rejects(provider.getStockFundamentals('12345'), /6 位代码/);
+  });
+
+  it('能力未启用 → TopKUnsupportedError', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 })
+    });
+    await assert.rejects(provider.getStockFundamentals('600519'), TopKUnsupportedError);
+  });
+
+  it('空数据 → FundNotFoundError', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [] }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockFundamentals: true }
+        });
+        await assert.rejects(provider.getStockFundamentals('600519'), FundNotFoundError);
+      }
+    );
+  });
+});

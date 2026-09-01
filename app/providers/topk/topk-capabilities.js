@@ -17,6 +17,7 @@
  * @property {boolean} getFundRank         - 基金排行榜
  * @property {boolean} getEtfSpot          - ETF 实时行情
  * @property {boolean} getFundValuation    - 实时估值（与现有数据源 1/2/3 重复，暂不实现）
+ * @property {boolean} getStockFundamentals - A 股个股估值指标（PE/PB/PS/PEG/市值），用于持仓穿透估值
  */
 
 const DEFAULT_CAPABILITIES = {
@@ -30,7 +31,8 @@ const DEFAULT_CAPABILITIES = {
   getFundDividend: false,
   getFundRank: false,
   getEtfSpot: false,
-  getFundValuation: false
+  getFundValuation: false,
+  getStockFundamentals: false
 };
 
 export const TOPK_CAPABILITIES = Object.freeze({ ...DEFAULT_CAPABILITIES });
