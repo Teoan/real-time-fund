@@ -4,6 +4,7 @@ import timezone from 'dayjs/plugin/timezone';
 import { isArray, isNil, isNumber, isObject, isString } from 'lodash';
 import { storageStore } from '../stores';
 import { withRetry } from '../lib/asyncHelper';
+import { fetchWithRetry } from '../lib/fetchWithRetry';
 import { getQueryClient } from '../lib/get-query-client';
 import * as qk from '../lib/query-keys';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
@@ -2063,6 +2064,8 @@ const STOCK_FUNDAMENTALS_FIELDS = [
 const STOCK_FUNDAMENTALS_BATCH_SIZE = 50;
 const STOCK_FUNDAMENTALS_STALE_TIME = ONE_DAY_MS; // 24h
 const STOCK_FUNDAMENTALS_TIMEOUT_MS = 8000;
+const STOCK_FUNDAMENTALS_RETRIES = 2; // 东财 push2 偶发 EMPTY_RESPONSE/连接重置，重试可显著降低失败率
+const STOCK_FUNDAMENTALS_RETRY_BASE_MS = 200; // 首次退避基数（指数：200/400/800ms）
 
 const stockFundamentalsInflight = new Map(); // secid -> { promise, resolve, reject }
 const stockFundamentalsQueue = new Set(); // Set(secid)
@@ -2091,13 +2094,18 @@ const processStockFundamentalsQueue = async () => {
       // 单只串行 fetch（push2 单股接口最稳，避免 ulist 字段不全）
       const results = await Promise.all(
         chunk.map(async (secid) => {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), STOCK_FUNDAMENTALS_TIMEOUT_MS);
+          const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secid)}&fields=${encodeURIComponent(STOCK_FUNDAMENTALS_FIELDS)}&fltt=2&invt=2&_=${Date.now()}`;
           try {
-            const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secid)}&fields=${encodeURIComponent(STOCK_FUNDAMENTALS_FIELDS)}&fltt=2&invt=2&_=${Date.now()}`;
-            const res = await fetch(url, { signal: controller.signal });
-            clearTimeout(timer);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            // fetchWithRetry 内部已处理超时 / 指数退避重试 transient 网络错误
+            const res = await fetchWithRetry(url, {
+              timeoutMs: STOCK_FUNDAMENTALS_TIMEOUT_MS,
+              retries: STOCK_FUNDAMENTALS_RETRIES,
+              baseDelayMs: STOCK_FUNDAMENTALS_RETRY_BASE_MS
+            });
+            if (!res.ok) {
+              // HTTP 4xx/5xx：业务错误，fetchWithRetry 不会重试
+              throw new Error(`HTTP ${res.status}`);
+            }
             const json = await res.json();
             const d = json?.data;
             // f57 缺失或空视为无效
@@ -2120,8 +2128,10 @@ const processStockFundamentalsQueue = async () => {
               fetchedAt: Date.now()
             };
           } catch (e) {
-            clearTimeout(timer);
-            return { secid, __error: e?.message || 'fetch failed' };
+            // 携带浏览器底层网络错误原因（ERR_EMPTY_RESPONSE 等），便于排查
+            const msg = e?.message || 'fetch failed';
+            const causeMsg = e?.cause?.message ? ` (${e.cause.message})` : '';
+            return { secid, __error: `${msg}${causeMsg}` };
           }
         })
       );
