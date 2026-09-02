@@ -209,6 +209,8 @@ export default function HomePage() {
     setShowGroupDropdownMobile,
     isGroupSummarySticky,
     setIsGroupSummarySticky,
+    topkStockFundamentalsEnabled,
+    setTopkStockFundamentalsEnabled,
     syncFromCustomSettings
   } = useSettingsStore();
 
@@ -3491,7 +3493,8 @@ export default function HomePage() {
     isMobileOverride,
     dynamicStyleOverride,
     containerWidthOverride,
-    showGroupDropdownOverride
+    showGroupDropdownOverride,
+    topkStockFundamentalsOverride
   ) => {
     e?.preventDefault?.();
     const seconds = secondsOverride ?? tempSeconds;
@@ -3532,6 +3535,11 @@ export default function HomePage() {
     if (targetIsMobile) setShowGroupDropdownMobile(nextShowGroupDropdown);
     else setShowGroupDropdownPc(nextShowGroupDropdown);
 
+    const nextTopkStockFundamentals = isBoolean(topkStockFundamentalsOverride)
+      ? topkStockFundamentalsOverride
+      : topkStockFundamentalsEnabled;
+    setTopkStockFundamentalsEnabled(nextTopkStockFundamentals);
+
     // 在移动端不裁剪也不修改 pcContainerWidth，直接保留原值
     let w = Number(containerWidthOverride ?? containerWidth) || 1200;
     if (!targetIsMobile) {
@@ -3541,10 +3549,14 @@ export default function HomePage() {
 
     try {
       const parsed = useStorageStore.getState().customSettings || {};
+      const base = {
+        ...parsed,
+        topkStockFundamentalsEnabled: nextTopkStockFundamentals
+      };
       if (targetIsMobile) {
         // 仅更新当前运行端对应的开关键，不覆盖 PC 端宽度
         setCustomSettings({
-          ...parsed,
+          ...base,
           showMarketIndexMobile: nextShowMarketIndex,
           showGroupFundSearchMobile: nextShowGroupFundSearch,
           dynamicStyleMobile: nextDynamicStyle,
@@ -3552,7 +3564,7 @@ export default function HomePage() {
         });
       } else {
         setCustomSettings({
-          ...parsed,
+          ...base,
           pcContainerWidth: w,
           showMarketIndexPc: nextShowMarketIndex,
           showGroupFundSearchPc: nextShowGroupFundSearch,
@@ -4283,6 +4295,8 @@ export default function HomePage() {
     dynamicStyleMobile,
     showGroupDropdownPc,
     showGroupDropdownMobile,
+    topkStockFundamentalsEnabled,
+    setTopkStockFundamentalsEnabled,
     scanProgress: scanProgress ?? { stage: 'ocr', current: 0, total: 0 },
     scanImportProgress: scanImportProgress ?? { current: 0, total: 0, success: 0, failed: 0 },
     // Refs
