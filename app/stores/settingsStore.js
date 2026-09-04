@@ -17,8 +17,8 @@ export const useSettingsStore = create((set) => ({
   showGroupDropdownMobile: false,
   isGroupSummarySticky: false,
   // TopK 数据源：A 股单股估值走 TopK (AKShare stock_value_em) 而非东财 push2。
-  // 默认 false —— 不启用时持仓穿透维持原东财 push2 行为。
-  topkStockFundamentalsEnabled: false,
+  // 默认 true —— 使用 TopK 数据源，push2 作为 fallback。
+  topkStockFundamentalsEnabled: true,
 
   setTempSeconds: (val) => set({ tempSeconds: isFunction(val) ? val(useSettingsStore.getState().tempSeconds) : val }),
   setContainerWidth: (val) =>

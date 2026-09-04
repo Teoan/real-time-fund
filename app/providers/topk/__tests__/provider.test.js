@@ -303,9 +303,10 @@ describe('TopK Provider - getStockFundamentals', () => {
     await assert.rejects(provider.getStockFundamentals('12345'), /6 位代码/);
   });
 
-  it('能力未启用 → TopKUnsupportedError', async () => {
+  it('能力显式禁用 → TopKUnsupportedError', async () => {
     const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 })
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockFundamentals: false }
     });
     await assert.rejects(provider.getStockFundamentals('600519'), TopKUnsupportedError);
   });

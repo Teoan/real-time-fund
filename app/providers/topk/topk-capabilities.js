@@ -32,7 +32,7 @@ const DEFAULT_CAPABILITIES = {
   getFundRank: false,
   getEtfSpot: false,
   getFundValuation: false,
-  getStockFundamentals: false
+  getStockFundamentals: true
 };
 
 export const TOPK_CAPABILITIES = Object.freeze({ ...DEFAULT_CAPABILITIES });
