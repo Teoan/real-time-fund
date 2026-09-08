@@ -1,0 +1,166 @@
+/**
+ * TopK 天维度缓存单元测试
+ *
+ * 覆盖：
+ *   - 提取最新行 + 映射
+ *   - localStorage 读写
+ *   - 24h 过期
+ *   - 版本不匹配时忽略
+ *   - localStorage 不可用时静默
+ *
+ * 运行：node --test app/providers/topk/__tests__/daily-cache.test.js
+ */
+
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  getCachedStockFundamental,
+  writeCache,
+  cacheStockFundamentalFromRows,
+  cleanExpiredStockFundamentalsCache,
+  getStockFundamentalsCacheStats,
+  __test__ as dailyCacheInternals
+} from '../topk-daily-cache.js';
+
+// Mock localStorage
+const mockStorage = (() => {
+  let store = {};
+  return {
+    getItem: (k) => (k in store ? store[k] : null),
+    setItem: (k, v) => {
+      store[k] = String(v);
+    },
+    removeItem: (k) => {
+      delete store[k];
+    },
+    get length() {
+      return Object.keys(store).length;
+    },
+    key: (i) => Object.keys(store)[i] || null,
+    clear: () => {
+      store = {};
+    }
+  };
+})();
+
+// Patch global localStorage
+const origLocalStorage = globalThis.localStorage;
+beforeEach(() => {
+  Object.defineProperty(globalThis, 'localStorage', { value: mockStorage, writable: true, configurable: true });
+  mockStorage.clear();
+});
+afterEach(() => {
+  Object.defineProperty(globalThis, 'localStorage', { value: origLocalStorage, writable: true, configurable: true });
+});
+
+describe('extractLatestRow', () => {
+  it('取数据日期最新的一行', () => {
+    const rows = [
+      { 数据日期: '2024-06-01T00:00:00.000', 'PE(TTM)': 15, 市净率: 2 },
+      { 数据日期: '2024-06-03T00:00:00.000', 'PE(TTM)': 16, 市净率: 2.1 },
+      { 数据日期: '2024-06-02T00:00:00.000', 'PE(TTM)': 15.5, 市净率: 2.05 }
+    ];
+    const result = dailyCacheInternals.extractLatestRow(rows, { code: '600519' });
+    assert.equal(result.pe, 16);
+    assert.equal(result.pb, 2.1);
+    assert.equal(result.code, '600519');
+  });
+
+  it('空数组返回 null', () => {
+    assert.equal(dailyCacheInternals.extractLatestRow([], {}), null);
+    assert.equal(dailyCacheInternals.extractLatestRow(null, {}), null);
+  });
+
+  it('NaN 值归一为 null', () => {
+    const rows = [{ 数据日期: '2024-06-01T00:00:00.000', 'PE(TTM)': NaN, 市净率: 'NaT' }];
+    const result = dailyCacheInternals.extractLatestRow(rows, {});
+    assert.equal(result.pe, null);
+    assert.equal(result.pb, null);
+  });
+});
+
+describe('writeCache / getCachedStockFundamental', () => {
+  it('写入后可读取', () => {
+    const data = { code: '600519', pe: 20, pb: 6, fetchedAt: Date.now() };
+    writeCache('600519', data);
+    const cached = getCachedStockFundamental('600519');
+    assert.deepEqual(cached, data);
+  });
+
+  it('不存在的 key 返回 null', () => {
+    assert.equal(getCachedStockFundamental('999999'), null);
+  });
+
+  it('24h 后过期', () => {
+    const data = { code: '600519', pe: 20 };
+    writeCache('600519', data);
+
+    // 手动篡改 ts 为25h 前
+    const raw = JSON.parse(mockStorage.getItem('topk:stockFundamentals:600519'));
+    raw.ts = Date.now() - 25 * 60 * 60 * 1000;
+    mockStorage.setItem('topk:stockFundamentals:600519', JSON.stringify(raw));
+
+    assert.equal(getCachedStockFundamental('600519'), null);
+  });
+
+  it('版本不匹配时忽略', () => {
+    mockStorage.setItem(
+      'topk:stockFundamentals:600519',
+      JSON.stringify({
+        _v: 999,
+        ts: Date.now(),
+        data: { code: '600519' }
+      })
+    );
+    assert.equal(getCachedStockFundamental('600519'), null);
+  });
+
+  it('损坏的 JSON 静默忽略', () => {
+    mockStorage.setItem('topk:stockFundamentals:600519', 'not-json{{{');
+    assert.equal(getCachedStockFundamental('600519'), null);
+  });
+});
+
+describe('cacheStockFundamentalFromRows', () => {
+  it('从全量历史中提取最新行并缓存', () => {
+    const rows = [
+      { 数据日期: '2024-06-01T00:00:00.000', 'PE(TTM)': 15, 市净率: 2, 当日收盘价: 100 },
+      { 数据日期: '2024-06-03T00:00:00.000', 'PE(TTM)': 16, 市净率: 2.1, 当日收盘价: 102 }
+    ];
+    const result = cacheStockFundamentalFromRows('600519', rows, { secid: '1.600519', code: '600519' });
+    assert.equal(result.pe, 16);
+    assert.equal(result.price, 102);
+
+    // 验证已写入 localStorage
+    const cached = getCachedStockFundamental('600519');
+    assert.equal(cached.pe, 16);
+  });
+});
+
+describe('cleanExpiredStockFundamentalsCache', () => {
+  it('清理过期条目，保留未过期条目', () => {
+    writeCache('600519', { code: '600519', pe: 20 });
+    writeCache('000001', { code: '000001', pe: 5 });
+
+    // 篡改 600519 的 ts 使其过期
+    const raw = JSON.parse(mockStorage.getItem('topk:stockFundamentals:600519'));
+    raw.ts = Date.now() - 25 * 60 * 60 * 1000;
+    mockStorage.setItem('topk:stockFundamentals:600519', JSON.stringify(raw));
+
+    cleanExpiredStockFundamentalsCache();
+
+    assert.equal(getCachedStockFundamental('600519'), null);
+    assert.notEqual(getCachedStockFundamental('000001'), null);
+  });
+});
+
+describe('getStockFundamentalsCacheStats', () => {
+  it('返回缓存条数和字节数', () => {
+    writeCache('600519', { code: '600519', pe: 20 });
+    writeCache('000001', { code: '000001', pe: 5 });
+    const stats = getStockFundamentalsCacheStats();
+    assert.equal(stats.count, 2);
+    assert.ok(stats.totalBytes > 0);
+  });
+});

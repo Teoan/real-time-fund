@@ -10,6 +10,10 @@ import * as qk from '../lib/query-keys';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { isTradingDay } from '../lib/tradingCalendar';
 import { TOPK_PROVIDER } from '@/app/providers/topk';
+import {
+  getCachedStockFundamental,
+  writeCache as writeStockFundamentalCache
+} from '@/app/providers/topk/topk-daily-cache';
 import { useSettingsStore } from '../stores/settingsStore';
 
 import { DEFAULT_TZ, ONE_DAY_MS } from '@/app/constants';
@@ -2201,20 +2205,40 @@ const fetchStockFundamentalsBatched = (secid) => {
 
 /**
  * 通过 TopK Provider 拉取 A 股单股估值，复用 push2 同名缓存键 (stockFundamentals)。
- * 不另起 DataLoader —— TopK Provider 内部已带缓存 (24h staleTime) 与并发控制。
+ *
+ * 缓存层（优先级从高到低）：
+ *   1. TanStack Query 内存缓存（同一页面会话内有效）
+ *   2. localStorage 天级缓存（跨页面刷新有效，24h 过期）
+ *   3. TopK Provider 实时请求（stock_value_em，~1MB/只）
+ *
+ * stock_value_em 返回全量历史（~2107 行/1MB），但持仓穿透只需要最新 1 行（~500B）。
+ * 天级缓存只存储最新行，将单次请求的数据量从 1MB 降到 500B，
+ * 显著降低对 TopK 的请求频率和带宽消耗。
  */
 const topkFetchStockFundamentals = async (secid, symbol6) => {
+  // 1. TanStack Query 内存缓存
   const qc = getQueryClient();
-  const cached = qc.getQueryData(qk.stockFundamentals(secid));
-  if (cached !== undefined) return cached;
+  const memCached = qc.getQueryData(qk.stockFundamentals(secid));
+  if (memCached !== undefined) return memCached;
 
+  // 2. localStorage 天级缓存（24h 自然过期）
+  const localCached = getCachedStockFundamental(symbol6);
+  if (localCached) {
+    qc.setQueryData(qk.stockFundamentals(secid), localCached, { staleTime: ONE_DAY_MS });
+    return localCached;
+  }
+
+  // 3. TopK Provider 实时请求
   try {
     const result = await TOPK_PROVIDER.getStockFundamentals(symbol6, {
       secid,
       market: 'A',
       code: symbol6
     });
+    // 写入 TanStack Query 内存缓存
     qc.setQueryData(qk.stockFundamentals(secid), result, { staleTime: ONE_DAY_MS });
+    // 写入 localStorage 天级缓存（仅存最新行，~500B）
+    writeStockFundamentalCache(symbol6, result);
     return result;
   } catch (e) {
     throw e instanceof Error ? e : new Error(String(e?.message || e));

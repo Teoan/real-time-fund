@@ -34,3 +34,11 @@ export {
 } from './topk-mappers.js';
 
 export { createTopKProvider, defaultTopKProvider, TOPK_PROVIDER } from './topk-provider.js';
+
+export {
+  getCachedStockFundamental,
+  writeCache as writeStockFundamentalCache,
+  cacheStockFundamentalFromRows,
+  cleanExpiredStockFundamentalsCache,
+  getStockFundamentalsCacheStats
+} from './topk-daily-cache.js';
