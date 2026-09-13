@@ -58,3 +58,38 @@ export const supabase = isSupabaseConfigured
       }
     })
   : createNoopSupabase();
+
+// ---------------------------------------------------------------------------
+// 业务表访问前置条件（fund_related / fund_secid 等 RLS 仅 authenticated 可读）
+// - 无登录会话时直接跳过，避免匿名查询必然返回空 + 报错
+// - 服务不可达（域名无法解析 / 断网）时进入冷却熔断，避免反复发起失败请求
+// ---------------------------------------------------------------------------
+const SUPABASE_CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
+
+let supabaseHasSession = false;
+let supabaseCircuitOpenUntil = 0;
+
+if (isSupabaseConfigured && typeof window !== 'undefined') {
+  try {
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        supabaseHasSession = Boolean(data?.session);
+      })
+      .catch(() => {});
+    supabase.auth.onAuthStateChange((_event, session) => {
+      supabaseHasSession = Boolean(session);
+    });
+  } catch {}
+}
+
+/** 熔断是否处于冷却期 */
+export const isSupabaseCircuitOpen = () => Date.now() < supabaseCircuitOpenUntil;
+
+/** 标记 Supabase 服务不可达，开启冷却期（后续业务请求直接跳过） */
+export const tripSupabaseCircuit = () => {
+  supabaseCircuitOpenUntil = Date.now() + SUPABASE_CIRCUIT_COOLDOWN_MS;
+};
+
+/** 业务表是否可访问：已配置 + 已登录 + 未熔断 */
+export const canUseSupabaseBusiness = () => isSupabaseConfigured && supabaseHasSession && !isSupabaseCircuitOpen();

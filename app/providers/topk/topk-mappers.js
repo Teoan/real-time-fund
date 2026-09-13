@@ -151,10 +151,10 @@ const parseAkShareTimestamp = (raw) => {
  * 字段映射（项目字段 ← AKShare 列名）：
  *   pe             ← PE(TTM)
  *   pb             ← 市净率
- *   ps             ← 市销率   （项目沿用 push2 f163 命名）
+ *   ps             ← 市销率   （项目沿用 push2 f165 命名）
  *   peg            ← PEG值
- *   dividendYield  ← null     （TopK/AKShare 暂无可用接口）
- *   epsGrowth      ← null     （TopK/AKShare 暂无可用接口）
+ *   dividendYield  ← null     （stock_value_em 无此列；由 fund.js 的 push2 f126 轻量请求补充）
+ *   epsGrowth      ← null     （stock_value_em 无此列；由 fund.js 的 push2 f185 轻量请求补充）
  *   price          ← 当日收盘价
  *   totalMv        ← 总市值
  *   freeMv         ← 流通市值

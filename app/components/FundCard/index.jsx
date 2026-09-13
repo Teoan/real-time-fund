@@ -23,6 +23,9 @@ import FundIntradayChart from '../FundIntradayChart';
 import FundDailyEarnings from '../FundDailyEarnings';
 import { ChevronIcon, SettingsIcon, StarIcon, SwitchIcon, TrashIcon, LinkIcon } from '../Icons';
 import { getTagThemeBadgeProps } from '../AddTagDialog';
+import FundValuationBadge from '../FundValuationBadge';
+import FundValuationPanel from '../FundValuationPanel';
+import { useFundValuation } from '@/app/hooks/useFundValuation';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -220,6 +223,9 @@ export default function Index({
   const { funds, refreshMs } = useStorageStore();
 
   const [fetchedValuation, setFetchedValuation] = useState(null);
+
+  // 基金估值评分（持仓穿透 + 历史分位）
+  const { data: fundValuation, isLoading: fundValuationLoading } = useFundValuation(fundCode);
 
   const f = useMemo(() => {
     const found = funds?.find((item) => item.code === fundCode);
@@ -526,6 +532,7 @@ export default function Index({
                   })}
                 </span>
               )}
+              <FundValuationBadge valuation={fundValuation} />
             </span>
           </div>
         </div>
@@ -890,6 +897,7 @@ export default function Index({
         <Tabs defaultValue={hasHoldings ? 'holdings' : 'trend'} className="w-full">
           <TabsList className="w-full flex">
             {hasHoldings && <TabsTrigger value="holdings">前10重仓</TabsTrigger>}
+            <TabsTrigger value="valuation">估值分析</TabsTrigger>
             <TabsTrigger value="trend">业绩走势</TabsTrigger>
             {showValuationTrend && <TabsTrigger value="valuation_trend">估值走势</TabsTrigger>}
             {hasHoldingAmount && <TabsTrigger value="earnings">我的收益</TabsTrigger>}
@@ -978,6 +986,9 @@ export default function Index({
               </div>
             </TabsContent>
           )}
+          <TabsContent value="valuation" className="mt-3 outline-none">
+            <FundValuationPanel valuation={fundValuation} isLoading={fundValuationLoading} />
+          </TabsContent>
           <TabsContent value="trend" className="mt-3 outline-none">
             <FundTrendChart
               key={`${f.code}-${theme}`}
@@ -1012,6 +1023,22 @@ export default function Index({
         </Tabs>
       ) : (
         <>
+          {/* ── 估值分析（card 模式） ── */}
+          <div
+            style={{
+              marginBottom: 8,
+              padding: '8px 12px',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              background: 'var(--secondary)'
+            }}
+          >
+            <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: 6, color: 'var(--foreground)' }}>
+              估值分析
+            </div>
+            <FundValuationPanel valuation={fundValuation} isLoading={fundValuationLoading} />
+          </div>
+
           {hasHoldings && (
             <>
               <div

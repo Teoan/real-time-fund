@@ -90,3 +90,6 @@ export const topkFundHoldings = (code, yearOrLatest) => [
 
 /** TopK 健康检查（短 TTL） */
 export const topkHealth = () => ['topk', 'health'];
+
+/** @param {string} fundCode - 基金估值评分缓存键 */
+export const fundValuationScore = (fundCode) => ['fundValuationScore', String(fundCode || '').trim()];

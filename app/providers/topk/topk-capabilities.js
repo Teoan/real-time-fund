@@ -3,7 +3,8 @@
  *
  * 标记当前实现的 Provider 支持哪些业务能力。
  * 「AKShare 有接口」≠「TopK 部署的 AKTools 服务实际可用」≠「返回结构符合项目预期」。
- * 因此所有能力在编写时必须按真实联调结果调整；目前未联调，全部能力按"待联调"标记。
+ * 因此所有能力在编写时必须按真实联调结果调整；
+ * 已联调开启：getStockFundamentals、getFundDetail；其余待联调，保持关闭。
  *
  * @typedef {object} TopKProviderCapabilities
  * @property {boolean} searchFund          - 基金搜索
@@ -22,7 +23,9 @@
 
 const DEFAULT_CAPABILITIES = {
   searchFund: false,
-  getFundDetail: false,
+  // 联调通过（2026-09-13）：fund_individual_basic_info_xq 200 / <3KB / <1s，
+  // 返回 item/value 对，含「基金类型」「基金名称」字段，估值评分分类依赖它
+  getFundDetail: true,
   getFundLatestNav: false,
   getFundNavHistory: false,
   getFundHoldings: false,

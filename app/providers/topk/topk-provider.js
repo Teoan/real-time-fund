@@ -345,9 +345,10 @@ export const defaultTopKProvider = createTopKProvider();
 /**
  * 业务层统一调用入口（推荐 import）。
  *
- * 与 defaultTopKProvider 等价；默认所有能力均关闭。
- * 如需启用某个能力，请通过 settingsStore 增加配置项，并在调用方
- * （如 app/api/fund.js 的 fetchStockFundamentalsBatched）中根据能力
+ * 与 defaultTopKProvider 等价；能力开关见 topk-capabilities.js 的 DEFAULT_CAPABILITIES
+ * （当前已开启 getStockFundamentals、getFundDetail，其余默认关闭）。
+ * 如需调整某个能力，请修改 DEFAULT_CAPABILITIES 或通过 settingsStore 增加配置项，
+ * 并在调用方（如 app/api/fund.js 的 fetchStockFundamentalsBatched）中根据能力
  * 是否启用决定走 TopK 还是 fallback 到原东财 push2 实现。
  *
  * 启用方式（生产）：

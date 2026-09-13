@@ -7,7 +7,7 @@ import { withRetry } from '../lib/asyncHelper';
 import { fetchWithRetry } from '../lib/fetchWithRetry';
 import { getQueryClient } from '../lib/get-query-client';
 import * as qk from '../lib/query-keys';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import { isSupabaseConfigured, supabase, canUseSupabaseBusiness, tripSupabaseCircuit } from '../lib/supabase';
 import { isTradingDay } from '../lib/tradingCalendar';
 import { TOPK_PROVIDER } from '@/app/providers/topk';
 import {
@@ -15,6 +15,12 @@ import {
   writeCache as writeStockFundamentalCache
 } from '@/app/providers/topk/topk-daily-cache';
 import { useSettingsStore } from '../stores/settingsStore';
+import { classifyFund } from '@/app/lib/fundClassifier';
+import {
+  calculateValuationScore,
+  extractMetricsFromHoldingsValuation,
+  computePercentile
+} from '@/app/lib/valuationEngine';
 
 import { DEFAULT_TZ, ONE_DAY_MS } from '@/app/constants';
 
@@ -77,6 +83,23 @@ let fundSecidsTimeout = null;
 const processRelatedSectorsQueue = async () => {
   if (relatedSectorsQueue.size === 0) return;
 
+  // 无登录会话或服务熔断：直接以空值结束所有等待中的请求，不再发起网络请求
+  if (!canUseSupabaseBusiness()) {
+    for (const [seg, codesSet] of relatedSectorsQueue.entries()) {
+      for (const code of codesSet) {
+        const key = `${code}|${seg}`;
+        const resolver = relatedSectorsInflight.get(key);
+        if (resolver) {
+          resolver.resolve('');
+          relatedSectorsInflight.delete(key);
+        }
+      }
+    }
+    relatedSectorsQueue.clear();
+    relatedSectorsTimeout = null;
+    return;
+  }
+
   const currentQueues = new Map(relatedSectorsQueue);
   relatedSectorsQueue.clear();
   relatedSectorsTimeout = null;
@@ -114,6 +137,8 @@ const processRelatedSectorsQueue = async () => {
         }
       }
     } catch (e) {
+      // PostgREST 业务错误才带 code；无 code 视为域名不可达/断网，触发熔断冷却
+      if (!e?.code) tripSupabaseCircuit();
       for (const code of missingCodes) {
         const key = `${code}|${seg}`;
         const resolver = relatedSectorsInflight.get(key);
@@ -128,6 +153,20 @@ const processRelatedSectorsQueue = async () => {
 
 const processFundSecidsQueue = async () => {
   if (fundSecidsQueue.size === 0) return;
+
+  // 无登录会话或服务熔断：直接以空值结束所有等待中的请求，不再发起网络请求
+  if (!canUseSupabaseBusiness()) {
+    for (const label of fundSecidsQueue) {
+      const resolver = fundSecidsInflight.get(label);
+      if (resolver) {
+        resolver.resolve('');
+        fundSecidsInflight.delete(label);
+      }
+    }
+    fundSecidsQueue.clear();
+    fundSecidsTimeout = null;
+    return;
+  }
 
   const missingLabels = Array.from(fundSecidsQueue);
   fundSecidsQueue.clear();
@@ -161,6 +200,7 @@ const processFundSecidsQueue = async () => {
       }
     }
   } catch (e) {
+    if (!e?.code) tripSupabaseCircuit();
     for (const label of missingLabels) {
       const resolver = fundSecidsInflight.get(label);
       if (resolver) {
@@ -177,7 +217,7 @@ const processFundSecidsQueue = async () => {
  */
 export const fetchRelatedSectorsBatch = async (codes, { cacheTime = ONE_DAY_MS, authSegment = 'anon' } = {}) => {
   if (!isArray(codes) || codes.length === 0) return {};
-  if (!isSupabaseConfigured) return {};
+  if (!canUseSupabaseBusiness()) return {};
 
   const seg = authSegment != null && authSegment !== '' ? String(authSegment) : 'anon';
   const qc = getQueryClient();
@@ -245,7 +285,7 @@ const SECTOR_QUOTE_CACHE_MS = 60 * 1000;
  */
 export const fetchFundSecidsBatch = async (labels, { cacheTime = ONE_DAY_MS } = {}) => {
   if (!isArray(labels) || labels.length === 0) return {};
-  if (!isSupabaseConfigured) return {};
+  if (!canUseSupabaseBusiness()) return {};
 
   const qc = getQueryClient();
   const results = {};
@@ -2007,7 +2047,7 @@ export const submitFeedback = async (formData) => {
 // ============================================================================
 // StockFundamentals 批量微任务合并加载器 (DataLoader Pattern)
 // 单只股票基本面（PE/PB/PS/PEG/股息率/净利润同比等）
-// 接口：https://push2.eastmoney.com/api/qt/stock/get?secid=...&fields=...&fltt=2&invt=2
+// 接口：https://push2delay.eastmoney.com/api/qt/stock/get?secid=...&fields=...&fltt=2&invt=2
 // ============================================================================
 
 /**
@@ -2049,7 +2089,8 @@ const secidMarket = (secid) => {
 };
 
 // 字段映射（push2 实测有效字段，参考贵州茅台 / 美的 / 腾讯的实拉响应）
-// PE 动 = f162，PB = f167，PS = f163，PEG = f191，净利同比 = f192，股息率 = f173
+// PE(TTM) = f164，PB = f167，PS(TTM) = f165，净利同比 = f185，股息率 = f126
+// 注：push2 stock/get 不提供 PEG，PEG 由 TopK stock_value_em 提供（纯 push2 路径下置 null）
 const STOCK_FUNDAMENTALS_FIELDS = [
   'f43', // 最新价
   'f57', // 股票代码
@@ -2057,12 +2098,11 @@ const STOCK_FUNDAMENTALS_FIELDS = [
   'f86', // 时间戳
   'f116', // 总市值
   'f48', // 流通市值
-  'f162', // PE-TTM
+  'f164', // PE-TTM
   'f167', // PB
-  'f163', // PS
-  'f173', // 股息率
-  'f191', // PEG
-  'f192' // 净利润同比(%)
+  'f165', // PS-TTM
+  'f126', // 股息率(TTM)
+  'f185' // 净利润同比(%)
 ].join(',');
 
 const STOCK_FUNDAMENTALS_BATCH_SIZE = 50;
@@ -2074,6 +2114,37 @@ const STOCK_FUNDAMENTALS_RETRY_BASE_MS = 200; // 首次退避基数（指数：2
 const stockFundamentalsInflight = new Map(); // secid -> { promise, resolve, reject }
 const stockFundamentalsQueue = new Set(); // Set(secid)
 let stockFundamentalsTimeout = null;
+
+/** push2 补充字段：stock_value_em 无股息率/净利同比列，仅拉这 2 个字段补齐 */
+const STOCK_FUNDAMENTALS_SUPPLEMENT_FIELDS = ['f57', 'f126', 'f185'].join(',');
+
+/**
+ * push2 轻量补充请求：只拉股息率(f126)与净利润同比(f185)。
+ * best-effort —— 任何失败都返回 null，不影响主流程（TopK 的 pe/pb/ps/peg 照常使用）。
+ *
+ * @param {string} secid - 东财 secid（如 "1.600519"）
+ * @returns {Promise<{dividendYield: number|null, epsGrowth: number|null}|null>}
+ */
+const fetchPush2DividendGrowth = async (secid) => {
+  if (typeof window === 'undefined' || typeof fetch === 'undefined') return null;
+  const url = `https://push2delay.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secid)}&fields=${encodeURIComponent(STOCK_FUNDAMENTALS_SUPPLEMENT_FIELDS)}&fltt=2&invt=2&_=${Date.now()}`;
+  try {
+    const res = await fetchWithRetry(url, {
+      timeoutMs: STOCK_FUNDAMENTALS_TIMEOUT_MS,
+      retries: 1,
+      baseDelayMs: STOCK_FUNDAMENTALS_RETRY_BASE_MS
+    });
+    if (!res.ok) return null;
+    const d = (await res.json())?.data;
+    if (!d || !d.f57) return null;
+    return {
+      dividendYield: parseFundamentalField(d.f126),
+      epsGrowth: parseFundamentalField(d.f185)
+    };
+  } catch {
+    return null;
+  }
+};
 
 /** 安全转 number：null / "" / "-" / 非数 都返回 null */
 const parseFundamentalField = (v) => {
@@ -2098,7 +2169,7 @@ const processStockFundamentalsQueue = async () => {
       // 单只串行 fetch（push2 单股接口最稳，避免 ulist 字段不全）
       const results = await Promise.all(
         chunk.map(async (secid) => {
-          const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secid)}&fields=${encodeURIComponent(STOCK_FUNDAMENTALS_FIELDS)}&fltt=2&invt=2&_=${Date.now()}`;
+          const url = `https://push2delay.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secid)}&fields=${encodeURIComponent(STOCK_FUNDAMENTALS_FIELDS)}&fltt=2&invt=2&_=${Date.now()}`;
           try {
             // fetchWithRetry 内部已处理超时 / 指数退避重试 transient 网络错误
             const res = await fetchWithRetry(url, {
@@ -2122,12 +2193,12 @@ const processStockFundamentalsQueue = async () => {
               price: parseFundamentalField(d.f43),
               totalMv: parseFundamentalField(d.f116),
               freeMv: parseFundamentalField(d.f48),
-              pe: parseFundamentalField(d.f162),
+              pe: parseFundamentalField(d.f164),
               pb: parseFundamentalField(d.f167),
-              ps: parseFundamentalField(d.f163),
-              dividendYield: parseFundamentalField(d.f173),
-              peg: parseFundamentalField(d.f191),
-              epsGrowth: parseFundamentalField(d.f192),
+              ps: parseFundamentalField(d.f165),
+              dividendYield: parseFundamentalField(d.f126),
+              peg: null, // push2 stock/get 无 PEG 字段，由 TopK stock_value_em 提供
+              epsGrowth: parseFundamentalField(d.f185),
               updateTime: d.f86 != null ? String(d.f86) : null,
               fetchedAt: Date.now()
             };
@@ -2210,39 +2281,61 @@ const fetchStockFundamentalsBatched = (secid) => {
  *   1. TanStack Query 内存缓存（同一页面会话内有效）
  *   2. localStorage 天级缓存（跨页面刷新有效，24h 过期）
  *   3. TopK Provider 实时请求（stock_value_em，~1MB/只）
+ *   4. push2 轻量补充（仅 f126/f185 两个字段）：stock_value_em 无股息率/净利同比列，
+ *      用 push2 单股接口补齐后合并，best-effort，失败时两字段保持 null
  *
  * stock_value_em 返回全量历史（~2107 行/1MB），但持仓穿透只需要最新 1 行（~500B）。
  * 天级缓存只存储最新行，将单次请求的数据量从 1MB 降到 500B，
  * 显著降低对 TopK 的请求频率和带宽消耗。
  */
+const needsPush2Supplement = (r) => Boolean(r) && (r.dividendYield == null || r.epsGrowth == null);
+
 const topkFetchStockFundamentals = async (secid, symbol6) => {
-  // 1. TanStack Query 内存缓存
   const qc = getQueryClient();
+
+  // 1. TanStack Query 内存缓存（旧缓存可能缺股息率/净利同比，缺失时继续走补充）
   const memCached = qc.getQueryData(qk.stockFundamentals(secid));
-  if (memCached !== undefined) return memCached;
+  if (memCached !== undefined && !needsPush2Supplement(memCached)) return memCached;
 
   // 2. localStorage 天级缓存（24h 自然过期）
   const localCached = getCachedStockFundamental(symbol6);
-  if (localCached) {
+  if (localCached && !needsPush2Supplement(localCached)) {
     qc.setQueryData(qk.stockFundamentals(secid), localCached, { staleTime: ONE_DAY_MS });
     return localCached;
   }
 
-  // 3. TopK Provider 实时请求
-  try {
-    const result = await TOPK_PROVIDER.getStockFundamentals(symbol6, {
-      secid,
-      market: 'A',
-      code: symbol6
-    });
-    // 写入 TanStack Query 内存缓存
-    qc.setQueryData(qk.stockFundamentals(secid), result, { staleTime: ONE_DAY_MS });
-    // 写入 localStorage 天级缓存（仅存最新行，~500B）
-    writeStockFundamentalCache(symbol6, result);
-    return result;
-  } catch (e) {
-    throw e instanceof Error ? e : new Error(String(e?.message || e));
+  // 3. TopK Provider 实时请求（pe/pb/ps/peg）
+  let base = localCached;
+  if (!base) {
+    try {
+      base = await TOPK_PROVIDER.getStockFundamentals(symbol6, {
+        secid,
+        market: 'A',
+        code: symbol6
+      });
+      // 写入 localStorage 天级缓存（仅存最新行，~500B）
+      writeStockFundamentalCache(symbol6, base);
+    } catch (e) {
+      throw e instanceof Error ? e : new Error(String(e?.message || e));
+    }
   }
+
+  // 4. push2 轻量补充股息率(f126)/净利同比(f185)，成功后回写两层缓存
+  const merged = { ...base };
+  if (needsPush2Supplement(merged)) {
+    const supplement = await fetchPush2DividendGrowth(secid);
+    if (supplement) {
+      if (merged.dividendYield == null && supplement.dividendYield != null) {
+        merged.dividendYield = supplement.dividendYield;
+      }
+      if (merged.epsGrowth == null && supplement.epsGrowth != null) {
+        merged.epsGrowth = supplement.epsGrowth;
+      }
+      writeStockFundamentalCache(symbol6, merged);
+    }
+  }
+  qc.setQueryData(qk.stockFundamentals(secid), merged, { staleTime: ONE_DAY_MS });
+  return merged;
 };
 
 const PINGZHONGDATA_GLOBAL_KEYS = [
@@ -2908,4 +3001,168 @@ export const fetchHoldingsValuation = async (fundCode) => {
     perStock,
     updateTime: latestUpdateTime != null ? String(latestUpdateTime) : null
   };
+};
+
+// ============================================================================
+// 基金估值评分
+// ============================================================================
+
+/** stock_value_em 历史分位使用的指标列名映射 */
+const PERCENTILE_FIELD_MAP = {
+  pe: 'PE(TTM)',
+  pb: '市净率',
+  ps: '市销率',
+  dividendYield: '股息率' // stock_value_em 未提供，此字段暂不可用
+};
+
+/**
+ * 计算持仓股票的历史估值分位（加权平均）
+ *
+ * 使用 stock_value_em 近 5 年数据，计算每只 A 股在历史中的百分位，
+ * 再按持仓权重加权平均，得到基金层面的历史分位。
+ *
+ * @param {Array<{ code: string, weight: number }>} perStock - 持仓明细
+ * @param {string} metricKey - 指标 key（pe/pb/ps）
+ * @returns {Promise<number|null>} 0-100 的加权分位值
+ */
+const calculateHoldingsPercentile = async (perStock, metricKey) => {
+  if (!isArray(perStock) || perStock.length === 0) return null;
+  const fieldName = PERCENTILE_FIELD_MAP[metricKey];
+  if (!fieldName) return null;
+
+  const FIVE_YEARS_MS = 5 * 365 * 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - FIVE_YEARS_MS;
+
+  const entries = [];
+  for (const stock of perStock) {
+    const symbol6 = String(stock.code || '').trim();
+    if (!/^\d{6}$/.test(symbol6)) continue;
+    const weight = Number(stock.weight) || 0;
+    if (weight <= 0) continue;
+
+    try {
+      // 优先读天级缓存
+      const cached = getCachedStockFundamental(symbol6);
+      let currentValue = cached?.[metricKey] ?? null;
+
+      // 从 stock_value_em 获取历史序列
+      const rows = await TOPK_PROVIDER.client.call('stock_value_em', { symbol: symbol6 });
+      if (!isArray(rows) || rows.length === 0) continue;
+
+      // 取近 5 年数据
+      const recent = rows.filter((r) => {
+        const ts = new Date(r['数据日期']).getTime();
+        return Number.isFinite(ts) && ts > cutoff;
+      });
+      if (recent.length < 30) continue; // 样本太少，跳过
+
+      // 提取历史值
+      const historicalValues = recent
+        .map((r) => {
+          const v = r[fieldName];
+          if (v == null || !Number.isFinite(Number(v))) return null;
+          return Number(v);
+        })
+        .filter((v) => v != null);
+
+      if (historicalValues.length < 30) continue;
+
+      // 如果当前值缺失，取最新一行
+      if (currentValue == null) {
+        const latestRow = recent[recent.length - 1];
+        currentValue = Number(latestRow[fieldName]);
+      }
+      if (!Number.isFinite(currentValue)) continue;
+
+      const percentile = computePercentile(historicalValues, currentValue);
+      if (percentile != null) {
+        entries.push({ percentile, weight });
+      }
+    } catch {
+      // 单只股票失败不影响整体
+    }
+  }
+
+  if (entries.length === 0) return null;
+
+  // 按权重加权平均
+  const totalWeight = entries.reduce((s, e) => s + e.weight, 0);
+  if (totalWeight <= 0) return null;
+  return entries.reduce((s, e) => s + e.percentile * (e.weight / totalWeight), 0);
+};
+
+/**
+ * 获取基金估值评分
+ *
+ * 流程：
+ *   1. 获取基金详情（类型）+ 关联板块 → 分类
+ *   2. 获取持仓穿透估值（PE/PB/PS/PEG）
+ *   3. 计算历史分位（使用 stock_value_em 近 5 年数据）
+ *   4. 汇总计算估值评分
+ *
+ * 缓存与去重由调用方（useFundValuation 的 useQuery，key 同名）负责；
+ * 函数体内严禁再用 fetchQuery 包装同一 key —— in-flight 的 fetchQuery 会直接
+ * 返回外层尚未完成的 promise，形成自引用死锁，query 永远停在加载中。
+ *
+ * @param {string} fundCode - 基金代码
+ * @returns {Promise<object>} 估值评分结果
+ */
+export const fetchFundValuationScore = async (fundCode) => {
+  const c = String(fundCode || '').trim();
+  if (!c) return null;
+
+  try {
+    // 1. 分类：获取基金类型 + 基金名称 + 关联板块
+    let fundType = '';
+    let fundName = '';
+    let relatedSectors = [];
+    try {
+      const detail = await TOPK_PROVIDER.getFundDetail(c);
+      fundType = detail?.type || '';
+      fundName = detail?.name || '';
+    } catch {}
+    if (!fundName) {
+      // TopK 详情不可用（能力关闭/服务不可达）时，用本地持仓列表里的名称兜底分类
+      try {
+        const arr = storageStore.getItem('funds', []);
+        const local = isArray(arr) ? arr.find((x) => x.code === c) : null;
+        fundName = local?.name || '';
+      } catch {}
+    }
+    try {
+      const sectorData = await fetchRelatedSectorsBatch([c]);
+      relatedSectors = sectorData?.[c] ? [sectorData[c]] : [];
+    } catch {}
+
+    const classification = classifyFund(fundType, relatedSectors, fundName);
+
+    // 2. 持仓穿透估值
+    const holdingsVal = await fetchHoldingsValuation(c);
+    const metrics = extractMetricsFromHoldingsValuation(holdingsVal);
+
+    // 3. 计算历史分位（仅 A 股持仓）
+    const aStocks = (holdingsVal.perStock || []).filter((s) => s.market === 'A');
+    if (aStocks.length > 0) {
+      const [pePercentile, pbPercentile, psPercentile] = await Promise.all([
+        calculateHoldingsPercentile(aStocks, 'pe').catch(() => null),
+        calculateHoldingsPercentile(aStocks, 'pb').catch(() => null),
+        calculateHoldingsPercentile(aStocks, 'ps').catch(() => null)
+      ]);
+      metrics.pePercentile = pePercentile;
+      metrics.pbPercentile = pbPercentile;
+      metrics.psPercentile = psPercentile;
+    }
+
+    // 4. 计算评分
+    const result = calculateValuationScore(metrics, classification.category);
+    return {
+      ...result,
+      categoryName: classification.category,
+      confidence: result.confidence,
+      holdingsCoverage: holdingsVal.coveredWeight || 0,
+      updatedAt: new Date().toISOString()
+    };
+  } catch {
+    return null;
+  }
 };
