@@ -2819,7 +2819,7 @@ const parseWeightPercent = (weight) => {
  * @param {string} fundCode - 6 位基金代码
  * @returns {Promise<HoldingsValuationResult>}
  */
-export const fetchHoldingsValuation = async (fundCode) => {
+const fetchHoldingsValuation = async (fundCode) => {
   const c = String(fundCode || '').trim();
   const empty = (extra = {}) => ({
     fundCode: c,

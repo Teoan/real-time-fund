@@ -55,9 +55,6 @@ export const fundValuationLast = (fundCode) => ['fundValuationLast', String(fund
 /** @param {string} secid - 东方财富 push2 单股基本面缓存键（"1.600519"） */
 export const stockFundamentals = (secid) => ['stockFundamentals', String(secid || '').trim()];
 
-/** @param {string} fundCode - 基金持仓穿透估值聚合结果缓存键 */
-export const holdingsValuation = (fundCode) => ['holdingsValuation', String(fundCode || '').trim()];
-
 // ============================================================================
 // TopK Provider 查询键
 // ============================================================================

@@ -331,8 +331,6 @@ export default function HomePage() {
     _ms({ fundDeleteBulkConfirm: isFunction(v) ? v(_gs().fundDeleteBulkConfirm) : v });
   const setFundTagsEdit = (v) => _ms({ fundTagsEdit: isFunction(v) ? v(_gs().fundTagsEdit) : v });
   const setSuccessModal = (v) => _ms({ successModal: isFunction(v) ? v(_gs().successModal) : v });
-  const setHoldingsValuationModal = (v) =>
-    _ms({ holdingsValuationModal: isFunction(v) ? v(_gs().holdingsValuationModal) : v });
 
   const fundDetailDrawerCloseRef = useRef(null); // 由 MobileFundTable 注入，用于确认删除时关闭基金详情 Drawer
   const fundDetailDialogCloseRef = useRef(null); // 由 PcFundTable 注入，用于确认删除时关闭基金详情 Dialog
@@ -4066,12 +4064,6 @@ export default function HomePage() {
     setDataSourceModal({ open: true, fund });
   }, []);
 
-  const openHoldingsValuation = useCallback((fund) => {
-    const code = fund?.code;
-    if (!code) return;
-    setHoldingsValuationModal({ open: true, fundCode: String(code), fundName: fund?.name || null });
-  }, []);
-
   const handleDataSourceSelect = useCallback(
     (fundCode, sourceId, autoSource) => {
       setFunds((prev) => {
@@ -4156,7 +4148,6 @@ export default function HomePage() {
         onHoldingClick: openHoldingModal,
         onActionClick: openActionModal,
         onDataSourceClick: openDataSourceModal,
-        onOpenHoldingsValuation: openHoldingsValuation,
         onPercentModeToggle: togglePercentMode,
         onTodayPercentModeToggle: toggleTodayPercentMode,
         onToggleCollapse: toggleCollapse,
