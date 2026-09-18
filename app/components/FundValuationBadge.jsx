@@ -1,5 +1,6 @@
 'use client';
 
+import { Loader2 } from 'lucide-react';
 import { CATEGORY_NAMES } from '@/app/lib/fundClassifier';
 
 /**
@@ -20,11 +21,27 @@ const RATING_STYLES = {
  * 基金估值标签组件
  *
  * 在 FundCard 基金名称旁展示估值水平。
+ * 评分依赖逐只拉取个股估值历史（较慢），加载期间展示 spinner 占位，
+ * 避免「无标签」被误读为「该基金没有估值指标」。
  *
- * @param {{ valuation: object|null }} props
+ * @param {{ valuation: object|null, isLoading?: boolean }} props
  * @param {object} props.valuation - fetchFundValuationScore 返回值
+ * @param {boolean} [props.isLoading] - 估值计算中
  */
-export default function FundValuationBadge({ valuation }) {
+export default function FundValuationBadge({ valuation, isLoading = false }) {
+  if (isLoading) {
+    return (
+      <span
+        className="inline-flex items-center justify-center px-1.5 py-0.5 rounded leading-none"
+        style={{ background: 'var(--secondary)', color: 'var(--muted)' }}
+        title="估值计算中…"
+        aria-label="估值计算中"
+      >
+        <Loader2 className="animate-spin" size={10} />
+      </span>
+    );
+  }
+
   if (!valuation || valuation.score == null) return null;
 
   const style = RATING_STYLES[valuation.rating] || RATING_STYLES['数据不足'];

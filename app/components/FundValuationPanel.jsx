@@ -1,5 +1,6 @@
 'use client';
 
+import { Loader2 } from 'lucide-react';
 import { CATEGORY_NAMES } from '@/app/lib/fundClassifier';
 import FundValuationBadge from './FundValuationBadge';
 
@@ -80,8 +81,19 @@ function ScoreBar({ score }) {
 export default function FundValuationPanel({ valuation, isLoading = false }) {
   if (isLoading) {
     return (
-      <div style={{ padding: '16px 0', textAlign: 'center', color: 'var(--muted)', fontSize: '13px' }}>
-        估值数据加载中...
+      <div
+        style={{
+          padding: '16px 0',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 8,
+          color: 'var(--muted)'
+        }}
+      >
+        <Loader2 className="animate-spin" size={20} />
+        <span style={{ fontSize: '13px' }}>正基于持仓计算历史分位…</span>
+        <span style={{ fontSize: '11px', opacity: 0.7 }}>逐只拉取个股估值历史，约需数秒</span>
       </div>
     );
   }

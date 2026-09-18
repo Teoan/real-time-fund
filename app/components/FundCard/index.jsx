@@ -531,7 +531,7 @@ export default function Index({
                   })}
                 </span>
               )}
-              <FundValuationBadge valuation={fundValuation} />
+              <FundValuationBadge valuation={fundValuation} isLoading={fundValuationLoading} />
             </span>
           </div>
         </div>
