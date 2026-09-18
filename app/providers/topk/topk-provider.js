@@ -20,7 +20,8 @@ import {
   mapNavHistoryRow,
   mapOverviewRows,
   mapSearchFundRow,
-  mapStockFundamentalLatest
+  mapStockFundamentalLatest,
+  mapStockValueHistory
 } from './topk-mappers.js';
 import { createTopKClient } from './topk-client.js';
 
@@ -271,6 +272,36 @@ export function createTopKProvider(options = {}) {
   };
 
   /**
+   * 单股估值历史序列（A 股 6 位代码）。用于持仓历史分位计算。
+   *
+   * 与 getStockFundamentals 使用同一 AKShare 接口（stock_value_em），
+   * 区别在于本方法保留全量历史（约 2100 条日数据），按数据日期升序返回；
+   * 后者只取最新一行。缓存键独立，避免与「最新行」缓存互相覆盖。
+   *
+   * @param {string} symbol - A 股 6 位代码，如 "600519"
+   * @returns {Promise<Array<{ date: string, price: number|null, pe: number|null, pb: number|null, ps: number|null, peg: number|null }>>}
+   */
+  const getStockValueHistory = async (symbol) => {
+    if (!isCapabilitySupported(capabilities, 'getStockFundamentals')) {
+      throw new TopKUnsupportedError('TopK Provider 未启用 getStockFundamentals');
+    }
+    const s = String(symbol || '').trim();
+    if (!/^\d{6}$/.test(s)) {
+      throw new TopKError(`stock_value_em 仅接受 A 股 6 位代码: ${symbol}`);
+    }
+    return fetchCached(
+      ['stockValueHistory', s],
+      async () => {
+        const rows = await client.call(TOPK_ENDPOINTS.getStockFundamentals, { symbol: s });
+        const series = mapStockValueHistory(rows);
+        if (series.length === 0) throw new FundNotFoundError(`TopK 未返回单股估值历史: ${s}`);
+        return series;
+      },
+      TOPK_CACHE_TTL.getStockFundamentals
+    );
+  };
+
+  /**
    * 批量获取单股估值（DataLoader 模式，并发受控）。
    * @param {Array<{ symbol: string, secid?: string, market?: 'A'|'HK'|'US', code?: string, name?: string }>} targets
    * @returns {Promise<Record<string, StockFundamental|null>>}  key = symbol
@@ -301,6 +332,7 @@ export function createTopKProvider(options = {}) {
     getFundsLatestNavBatch,
     getStockFundamentals,
     getStockFundamentalsBatch,
+    getStockValueHistory,
     healthCheck
   };
 }

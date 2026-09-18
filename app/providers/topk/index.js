@@ -30,7 +30,9 @@ export {
   mapNavHistoryRow,
   mapHoldingRow,
   mapOverviewRows,
-  mapStockFundamentalLatest
+  mapStockFundamentalLatest,
+  mapStockValueRow,
+  mapStockValueHistory
 } from './topk-mappers.js';
 
 export { createTopKProvider, defaultTopKProvider, TOPK_PROVIDER } from './topk-provider.js';

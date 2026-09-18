@@ -324,3 +324,90 @@ describe('TopK Provider - getStockFundamentals', () => {
     );
   });
 });
+
+describe('TopK Provider - getStockValueHistory', () => {
+  const historyRows = [
+    {
+      数据日期: '2024-06-04T00:00:00.000',
+      当日收盘价: 102,
+      'PE(TTM)': 15.8,
+      市净率: 2.35,
+      市销率: 1.84,
+      PEG值: 1.22
+    },
+    {
+      数据日期: '2024-06-03T00:00:00.000',
+      当日收盘价: 100,
+      'PE(TTM)': 15.5,
+      市净率: 2.3,
+      市销率: 1.8,
+      PEG值: 1.2
+    }
+  ];
+
+  it('返回按数据日期升序的归一化序列（不泄漏 AKShare 列名）', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: historyRows }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockFundamentals: true }
+        });
+        const out = await provider.getStockValueHistory('600519');
+        assert.equal(out.length, 2);
+        assert.deepEqual(
+          out.map((r) => r.date),
+          ['2024-06-03', '2024-06-04']
+        );
+        assert.equal(out[0].pe, 15.5);
+        assert.equal(out[0].pb, 2.3);
+        assert.equal(out[0].ps, 1.8);
+        assert.equal(out[0].peg, 1.2);
+        assert.equal(out[0].price, 100);
+        assert.equal(out[1].pe, 15.8);
+      }
+    );
+  });
+
+  it('非法日期的行被丢弃', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [{ 数据日期: 'bad', 'PE(TTM)': 99 }] }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockFundamentals: true }
+        });
+        await assert.rejects(provider.getStockValueHistory('600519'), FundNotFoundError);
+      }
+    );
+  });
+
+  it('非 6 位代码 → TopKError', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockFundamentals: true }
+    });
+    await assert.rejects(provider.getStockValueHistory('12345'), /6 位代码/);
+  });
+
+  it('能力显式禁用 → TopKUnsupportedError', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockFundamentals: false }
+    });
+    await assert.rejects(provider.getStockValueHistory('600519'), TopKUnsupportedError);
+  });
+
+  it('空数据 → FundNotFoundError', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [] }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockFundamentals: true }
+        });
+        await assert.rejects(provider.getStockValueHistory('600519'), FundNotFoundError);
+      }
+    );
+  });
+});

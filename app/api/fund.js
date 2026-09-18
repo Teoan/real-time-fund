@@ -2974,13 +2974,8 @@ export const fetchHoldingsValuation = async (fundCode) => {
 // 基金估值评分
 // ============================================================================
 
-/** stock_value_em 历史分位使用的指标列名映射 */
-const PERCENTILE_FIELD_MAP = {
-  pe: 'PE(TTM)',
-  pb: '市净率',
-  ps: '市销率',
-  dividendYield: '股息率' // stock_value_em 未提供，此字段暂不可用
-};
+/** 参与历史分位计算的估值指标（对应 stock_value_em 归一化序列的字段名） */
+const PERCENTILE_METRIC_KEYS = ['pe', 'pb', 'ps'];
 
 /**
  * 计算持仓股票的历史估值分位（加权平均）
@@ -2988,74 +2983,70 @@ const PERCENTILE_FIELD_MAP = {
  * 使用 stock_value_em 近 5 年数据，计算每只 A 股在历史中的百分位，
  * 再按持仓权重加权平均，得到基金层面的历史分位。
  *
+ * 每只股票的历史序列只请求一次，PE/PB/PS 三个指标共用，
+ * 避免同一份 ~700KB 历史数据被重复拉取三次。
+ *
  * @param {Array<{ code: string, weight: number }>} perStock - 持仓明细
- * @param {string} metricKey - 指标 key（pe/pb/ps）
- * @returns {Promise<number|null>} 0-100 的加权分位值
+ * @returns {Promise<{ pe: number|null, pb: number|null, ps: number|null }>} 0-100 的加权分位值
  */
-const calculateHoldingsPercentile = async (perStock, metricKey) => {
-  if (!isArray(perStock) || perStock.length === 0) return null;
-  const fieldName = PERCENTILE_FIELD_MAP[metricKey];
-  if (!fieldName) return null;
+const calculateHoldingsPercentiles = async (perStock) => {
+  const result = { pe: null, pb: null, ps: null };
+  if (!isArray(perStock) || perStock.length === 0) return result;
 
   const FIVE_YEARS_MS = 5 * 365 * 24 * 60 * 60 * 1000;
   const cutoff = Date.now() - FIVE_YEARS_MS;
 
-  const entries = [];
+  const entriesByMetric = { pe: [], pb: [], ps: [] };
+
   for (const stock of perStock) {
     const symbol6 = String(stock.code || '').trim();
     if (!/^\d{6}$/.test(symbol6)) continue;
     const weight = Number(stock.weight) || 0;
     if (weight <= 0) continue;
 
+    let series;
     try {
-      // 优先读天级缓存
-      const cached = getCachedStockFundamental(symbol6);
-      let currentValue = cached?.[metricKey] ?? null;
+      series = await TOPK_PROVIDER.getStockValueHistory(symbol6);
+    } catch {
+      continue; // 单只股票失败不影响整体
+    }
+    if (!isArray(series) || series.length === 0) continue;
 
-      // 从 stock_value_em 获取历史序列
-      const rows = await TOPK_PROVIDER.client.call('stock_value_em', { symbol: symbol6 });
-      if (!isArray(rows) || rows.length === 0) continue;
+    // 取近 5 年数据
+    const recent = series.filter((r) => {
+      const ts = new Date(r.date).getTime();
+      return Number.isFinite(ts) && ts > cutoff;
+    });
+    if (recent.length < 30) continue; // 样本太少，跳过
 
-      // 取近 5 年数据
-      const recent = rows.filter((r) => {
-        const ts = new Date(r['数据日期']).getTime();
-        return Number.isFinite(ts) && ts > cutoff;
-      });
-      if (recent.length < 30) continue; // 样本太少，跳过
+    const latest = recent[recent.length - 1];
+    const cached = getCachedStockFundamental(symbol6);
 
-      // 提取历史值
-      const historicalValues = recent
-        .map((r) => {
-          const v = r[fieldName];
-          if (v == null || !Number.isFinite(Number(v))) return null;
-          return Number(v);
-        })
-        .filter((v) => v != null);
-
+    for (const metricKey of PERCENTILE_METRIC_KEYS) {
+      const historicalValues = recent.map((r) => r[metricKey]).filter((v) => Number.isFinite(v));
       if (historicalValues.length < 30) continue;
 
-      // 如果当前值缺失，取最新一行
-      if (currentValue == null) {
-        const latestRow = recent[recent.length - 1];
-        currentValue = Number(latestRow[fieldName]);
-      }
+      // 当前值优先取天级缓存（与持仓穿透同一口径），缺失时回退到最新一行
+      const currentValue = Number.isFinite(cached?.[metricKey]) ? cached[metricKey] : latest?.[metricKey];
       if (!Number.isFinite(currentValue)) continue;
 
       const percentile = computePercentile(historicalValues, currentValue);
       if (percentile != null) {
-        entries.push({ percentile, weight });
+        entriesByMetric[metricKey].push({ percentile, weight });
       }
-    } catch {
-      // 单只股票失败不影响整体
     }
   }
 
-  if (entries.length === 0) return null;
+  for (const metricKey of PERCENTILE_METRIC_KEYS) {
+    const entries = entriesByMetric[metricKey];
+    if (entries.length === 0) continue;
+    // 按权重加权平均
+    const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
+    if (totalWeight <= 0) continue;
+    result[metricKey] = entries.reduce((sum, e) => sum + e.percentile * (e.weight / totalWeight), 0);
+  }
 
-  // 按权重加权平均
-  const totalWeight = entries.reduce((s, e) => s + e.weight, 0);
-  if (totalWeight <= 0) return null;
-  return entries.reduce((s, e) => s + e.percentile * (e.weight / totalWeight), 0);
+  return result;
 };
 
 /**
@@ -3110,14 +3101,10 @@ export const fetchFundValuationScore = async (fundCode) => {
     // 3. 计算历史分位（仅 A 股持仓）
     const aStocks = (holdingsVal.perStock || []).filter((s) => s.market === 'A');
     if (aStocks.length > 0) {
-      const [pePercentile, pbPercentile, psPercentile] = await Promise.all([
-        calculateHoldingsPercentile(aStocks, 'pe').catch(() => null),
-        calculateHoldingsPercentile(aStocks, 'pb').catch(() => null),
-        calculateHoldingsPercentile(aStocks, 'ps').catch(() => null)
-      ]);
-      metrics.pePercentile = pePercentile;
-      metrics.pbPercentile = pbPercentile;
-      metrics.psPercentile = psPercentile;
+      const percentiles = await calculateHoldingsPercentiles(aStocks);
+      metrics.pePercentile = percentiles.pe;
+      metrics.pbPercentile = percentiles.pb;
+      metrics.psPercentile = percentiles.ps;
     }
 
     // 4. 计算评分

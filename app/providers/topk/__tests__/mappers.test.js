@@ -19,6 +19,8 @@ import {
   mapOverviewRows,
   mapSearchFundRow,
   mapStockFundamentalLatest,
+  mapStockValueRow,
+  mapStockValueHistory,
   __test__ as mappersInternals
 } from '../topk-mappers.js';
 
@@ -233,5 +235,71 @@ describe('mapStockFundamentalLatest', () => {
     const out = mapStockFundamentalLatest([{ 数据日期: '2024-06-01T00:00:00.000', 'PE(TTM)': 12 }], {});
     assert.equal(out.market, 'A');
     assert.equal(out.secid, null);
+  });
+});
+
+describe('mapStockValueRow', () => {
+  it('中文列名 → 领域字段，日期归一', () => {
+    const out = mapStockValueRow({
+      数据日期: '2024-06-03T00:00:00.000',
+      当日收盘价: 100,
+      'PE(TTM)': 15.5,
+      市净率: 2.3,
+      市销率: 1.8,
+      PEG值: 1.2
+    });
+    assert.deepEqual(out, {
+      date: '2024-06-03',
+      price: 100,
+      pe: 15.5,
+      pb: 2.3,
+      ps: 1.8,
+      peg: 1.2
+    });
+  });
+
+  it('非法日期返回 null', () => {
+    assert.equal(mapStockValueRow({ 数据日期: 'bad', 'PE(TTM)': 10 }), null);
+    assert.equal(mapStockValueRow(null), null);
+  });
+
+  it('NaN/NaT 数字字段归一为 null', () => {
+    const out = mapStockValueRow({
+      数据日期: '2024-06-01T00:00:00.000',
+      当日收盘价: NaN,
+      'PE(TTM)': 'NaN',
+      市净率: 'NaT'
+    });
+    assert.equal(out.price, null);
+    assert.equal(out.pe, null);
+    assert.equal(out.pb, null);
+  });
+});
+
+describe('mapStockValueHistory', () => {
+  it('按数据日期升序排序', () => {
+    const out = mapStockValueHistory([
+      { 数据日期: '2024-06-05T00:00:00.000', 'PE(TTM)': 17 },
+      { 数据日期: '2024-06-03T00:00:00.000', 'PE(TTM)': 15 },
+      { 数据日期: '2024-06-04T00:00:00.000', 'PE(TTM)': 16 }
+    ]);
+    assert.deepEqual(
+      out.map((r) => r.date),
+      ['2024-06-03', '2024-06-04', '2024-06-05']
+    );
+    assert.deepEqual(
+      out.map((r) => r.pe),
+      [15, 16, 17]
+    );
+  });
+
+  it('非法行被丢弃', () => {
+    const out = mapStockValueHistory([{ 数据日期: 'bad' }, { 数据日期: '2024-06-03T00:00:00.000', 'PE(TTM)': 15 }]);
+    assert.equal(out.length, 1);
+  });
+
+  it('空/非数组 → 空数组', () => {
+    assert.deepEqual(mapStockValueHistory([]), []);
+    assert.deepEqual(mapStockValueHistory(null), []);
   });
 });

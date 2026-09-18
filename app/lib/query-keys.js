@@ -88,6 +88,9 @@ export const topkFundHoldings = (code, yearOrLatest) => [
   String(yearOrLatest || 'latest')
 ];
 
+/** @param {string} symbol - TopK 单股估值历史序列缓存键（6 位 A 股代码） */
+export const topkStockValueHistory = (symbol) => ['topk', 'stockValueHistory', String(symbol || '').trim()];
+
 /** TopK 健康检查（短 TTL） */
 export const topkHealth = () => ['topk', 'health'];
 

@@ -189,4 +189,44 @@ export const mapStockFundamentalLatest = (rows, ctx = {}) => {
   };
 };
 
+/**
+ * stock_value_em 单行 → 单日估值点（保留完整历史序列，用于历史分位计算）
+ *
+ * 与 mapStockFundamentalLatest 的区别：后者只取最新一行，本函数保留逐日序列。
+ *
+ * 字段映射（项目字段 ← AKShare 列名）：
+ *   date ← 数据日期
+ *   pe   ← PE(TTM)
+ *   pb   ← 市净率
+ *   ps   ← 市销率   （项目沿用 push2 f165 命名）
+ *   peg  ← PEG值
+ *
+ * @param {object} row
+ * @returns {{ date: string, price: number|null, pe: number|null, pb: number|null, ps: number|null, peg: number|null }|null}
+ */
+export const mapStockValueRow = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  const date = toIsoDate(row['数据日期']);
+  if (!date) return null;
+  return {
+    date,
+    price: toFiniteNumber(row['当日收盘价']),
+    pe: toFiniteNumber(row['PE(TTM)']),
+    pb: toFiniteNumber(row['市净率']),
+    ps: toFiniteNumber(row['市销率']),
+    peg: toFiniteNumber(row['PEG值'])
+  };
+};
+
+/**
+ * stock_value_em 整段历史 → 按数据日期升序的估值序列。
+ */
+export const mapStockValueHistory = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  return rows
+    .map(mapStockValueRow)
+    .filter(Boolean)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+};
+
 export const __test__ = { toFiniteNumber, toIsoDate, pickString, extractReportDate, parseAkShareTimestamp };
