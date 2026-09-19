@@ -2305,6 +2305,147 @@ const topkFetchStockFundamentals = async (secid, symbol6) => {
   return merged;
 };
 
+// ============================================================================
+// 单股 ROE 补充（东财 F10 主源 + TopK 兜底）
+// 用于持仓穿透估值的 ROE 指标；仅适用于 A 股，港美股不适用
+// ============================================================================
+
+const F10_ROE_REPORT_NAME = 'RPT_F10_FINANCE_MAINFINADATA';
+const F10_ROE_COLUMNS = 'SECUCODE,REPORT_DATE,REPORT_DATE_NAME,ROEJQ,ROEKCJQ';
+const F10_ROE_TIMEOUT_MS = 8000;
+const STOCK_ROE_STALE_TIME = ONE_DAY_MS;
+
+/**
+ * 6 位 A 股代码 → 东方财富 SECUCODE（600519 → 600519.SH / 000001 → 000001.SZ / 830799 → 830799.BJ）
+ * @param {string} symbol6
+ * @returns {string|null}
+ */
+const toSecucode = (symbol6) => {
+  const s = String(symbol6 || '').trim();
+  if (!/^\d{6}$/.test(s)) return null;
+  if (s.startsWith('6') || s.startsWith('9')) return `${s}.SH`;
+  if (s.startsWith('4') || s.startsWith('8')) return `${s}.BJ`;
+  return `${s}.SZ`;
+};
+
+/**
+ * 东方财富 F10 主要财务指标 · 最近一期加权净资产收益率（ROEJQ，%）。
+ *
+ * 通过 JSONP（script 注入 + 具名回调）获取，规避浏览器跨域限制。
+ * 任何异常 / 超时 / 无数据都 resolve(null)，由调用方决定是否兜底。
+ *
+ * @param {string} symbol6 - 6 位 A 股代码
+ * @returns {Promise<number|null>}
+ */
+const fetchEastmoneyF10Roe = (symbol6) => {
+  return new Promise((resolve) => {
+    if (typeof window === 'undefined' || typeof document === 'undefined' || !document.body) {
+      resolve(null);
+      return;
+    }
+    const secucode = toSecucode(symbol6);
+    if (!secucode) {
+      resolve(null);
+      return;
+    }
+
+    const callbackName = `__rtfRoe_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const url =
+      `https://datacenter-web.eastmoney.com/api/data/v1/get?reportName=${F10_ROE_REPORT_NAME}` +
+      `&columns=${encodeURIComponent(F10_ROE_COLUMNS)}` +
+      `&filter=${encodeURIComponent(`(SECUCODE="${secucode}")`)}` +
+      `&pageNumber=1&pageSize=1&sortColumns=REPORT_DATE&sortTypes=-1` +
+      `&callback=${callbackName}`;
+
+    const script = document.createElement('script');
+    script.src = url;
+    script.async = true;
+
+    let done = false;
+    const cleanup = () => {
+      done = true;
+      if (timer) clearTimeout(timer);
+      try {
+        delete window[callbackName];
+      } catch (e) {}
+      if (document.body.contains(script)) document.body.removeChild(script);
+    };
+
+    const timer = setTimeout(() => {
+      if (done) return;
+      cleanup();
+      resolve(null);
+    }, F10_ROE_TIMEOUT_MS);
+
+    window[callbackName] = (payload) => {
+      if (done) return;
+      const raw = payload?.result?.data?.[0]?.ROEJQ;
+      const num = raw == null ? NaN : Number(raw);
+      cleanup();
+      resolve(Number.isFinite(num) ? num : null);
+    };
+
+    script.onerror = () => {
+      if (done) return;
+      cleanup();
+      resolve(null);
+    };
+
+    document.body.appendChild(script);
+  });
+};
+
+/**
+ * 获取单只 A 股 ROE（加权净资产收益率，%）。
+ *
+ * 数据源优先级：
+ *   1. 东方财富 F10 主要财务指标（浏览器端 JSONP，主源）
+ *   2. TopK / AKShare stock_financial_analysis_indicator（服务端代理，兜底）
+ *
+ * 成功结果按 symbol 缓存 24h；两个数据源都失败时返回 null 且不缓存，便于后续重试。
+ *
+ * @param {string} symbol6 - 6 位 A 股代码
+ * @returns {Promise<number|null>}
+ */
+const fetchStockRoeWithFallback = (symbol6) => {
+  const s = String(symbol6 || '').trim();
+  if (!/^\d{6}$/.test(s)) return Promise.resolve(null);
+  if (typeof window === 'undefined') return Promise.resolve(null);
+
+  const qc = getQueryClient();
+  const cached = qc.getQueryData(qk.stockRoe(s));
+  if (cached !== undefined) return Promise.resolve(cached);
+
+  return qc
+    .fetchQuery({
+      queryKey: qk.stockRoe(s),
+      queryFn: async () => {
+        let roe = null;
+        try {
+          roe = await fetchEastmoneyF10Roe(s);
+        } catch (e) {
+          roe = null;
+        }
+        if (roe == null) {
+          try {
+            const v = await TOPK_PROVIDER.getStockRoe(s);
+            if (isNumber(v) && Number.isFinite(v)) roe = v;
+          } catch (e) {
+            roe = null;
+          }
+        }
+        return roe;
+      },
+      staleTime: STOCK_ROE_STALE_TIME
+    })
+    .then((roe) => {
+      // 失败结果不缓存，下次调用可重试
+      if (roe == null) qc.removeQueries({ queryKey: qk.stockRoe(s) });
+      return roe == null ? null : roe;
+    })
+    .catch(() => null);
+};
+
 const PINGZHONGDATA_GLOBAL_KEYS = [
   'ishb',
   'fS_name',
@@ -2803,9 +2944,10 @@ const parseWeightPercent = (weight) => {
  * @property {Array<{code, name, weight, reason: 'foreign'|'fetch_failed'}>} skippedDetails
  * @property {{
  *   pe: number|null, pb: number|null, ps: number|null,
- *   peg: number|null, epsGrowth: number|null, dividendYield: number|null
+ *   peg: number|null, epsGrowth: number|null, dividendYield: number|null,
+ *   roe: number|null
  * }|null} metrics
- * @property {Array<{code, name, weight, secid, market, pe, pb, ps, peg, epsGrowth, dividendYield}>} perStock
+ * @property {Array<{code, name, weight, secid, market, pe, pb, ps, peg, epsGrowth, dividendYield, roe}>} perStock
  * @property {string|null} updateTime - 数据获取时间
  */
 
@@ -2862,7 +3004,14 @@ const fetchHoldingsValuation = async (fundCode) => {
   // 3. 仅 A 股走 fetch（港美股直接归入 skipped）
   const aStockTargets = parsed.filter((x) => x.secid && x.market === 'A');
   const fundamentalsResults = await Promise.allSettled(
-    aStockTargets.map((x) => fetchStockFundamentalsBatched(x.secid))
+    aStockTargets.map(async (x) => {
+      const fundamental = await fetchStockFundamentalsBatched(x.secid);
+      if (!fundamental || fundamental.__error) return fundamental;
+      // ROE 与估值倍数来自不同接口，单独补充（东财 F10 主源 + TopK 兜底）；
+      // 拉取失败不影响该股票其余指标
+      const roe = await fetchStockRoeWithFallback(x.code);
+      return roe == null ? fundamental : { ...fundamental, roe };
+    })
   );
 
   const fundBySecid = new Map();
@@ -2913,7 +3062,9 @@ const fetchHoldingsValuation = async (fundCode) => {
     psSum = 0,
     pegSum = 0,
     epsGrowthSum = 0,
-    dividendSum = 0;
+    dividendSum = 0,
+    roeSum = 0;
+  let roeHasValue = false;
   const perStock = [];
   let latestUpdateTime = null;
 
@@ -2927,6 +3078,10 @@ const fetchHoldingsValuation = async (fundCode) => {
     if (f.peg != null) pegSum += w * f.peg;
     if (f.epsGrowth != null) epsGrowthSum += w * f.epsGrowth;
     if (f.dividendYield != null) dividendSum += w * f.dividendYield;
+    if (f.roe != null) {
+      roeSum += w * f.roe;
+      roeHasValue = true;
+    }
 
     if (f.updateTime && (!latestUpdateTime || Number(f.updateTime) > Number(latestUpdateTime))) {
       latestUpdateTime = f.updateTime;
@@ -2943,7 +3098,8 @@ const fetchHoldingsValuation = async (fundCode) => {
       ps: f.ps,
       peg: f.peg,
       epsGrowth: f.epsGrowth,
-      dividendYield: f.dividendYield
+      dividendYield: f.dividendYield,
+      roe: f.roe ?? null
     });
   }
 
@@ -2953,7 +3109,8 @@ const fetchHoldingsValuation = async (fundCode) => {
     ps: psSum,
     peg: pegSum,
     epsGrowth: epsGrowthSum,
-    dividendYield: dividendSum
+    dividendYield: dividendSum,
+    roe: roeHasValue ? roeSum : null
   };
 
   return {

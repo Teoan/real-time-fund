@@ -20,6 +20,7 @@ import {
   pegToScore,
   dividendYieldToScore,
   epsGrowthToScore,
+  roeToScore,
   computePercentile,
   scoreToRating,
   extractMetricsFromHoldingsValuation,
@@ -279,6 +280,30 @@ describe('epsGrowthToScore', () => {
   });
 });
 
+describe('roeToScore', () => {
+  it('ROE 越高分越低（盈利质量越好越便宜）', () => {
+    assert.ok(roeToScore(30) < roeToScore(12));
+    assert.ok(roeToScore(12) < roeToScore(2));
+    assert.ok(roeToScore(2) < roeToScore(-5));
+  });
+
+  it('边界档位', () => {
+    assert.equal(roeToScore(25), 10);
+    assert.equal(roeToScore(20), 20);
+    assert.equal(roeToScore(15), 35);
+    assert.equal(roeToScore(10), 50);
+    assert.equal(roeToScore(5), 65);
+    assert.equal(roeToScore(0), 78);
+    assert.equal(roeToScore(-1), 90);
+  });
+
+  it('null/NaN/Infinity → null', () => {
+    assert.equal(roeToScore(null), null);
+    assert.equal(roeToScore(NaN), null);
+    assert.equal(roeToScore(Infinity), null);
+  });
+});
+
 describe('computePercentile', () => {
   it('正常计算', () => {
     const values = [10, 20, 30, 40, 50];
@@ -411,6 +436,25 @@ describe('calculateValuationScore', () => {
     assert.equal(dyDetail.score, 10);
   });
 
+  it('金融：ROE 参与评分，盈利越强总分越低', () => {
+    const strong = calculateValuationScore({ pbPercentile: 20, roe: 18 }, FUND_CATEGORIES.FINANCE);
+    const weak = calculateValuationScore({ pbPercentile: 20, roe: 1 }, FUND_CATEGORIES.FINANCE);
+    const roeDetail = strong.details.find((d) => d.key === 'roe');
+    assert.equal(roeDetail.contributed, true);
+    assert.equal(roeDetail.rawValue, 18);
+    assert.equal(roeDetail.score, 35);
+    assert.ok(strong.score < weak.score, `strong(${strong.score}) 应低于 weak(${weak.score})`);
+  });
+
+  it('金融：ROE 缺失时该指标不计入，仅降低置信度', () => {
+    const withRoe = calculateValuationScore({ pbPercentile: 20, roe: 18 }, FUND_CATEGORIES.FINANCE);
+    const withoutRoe = calculateValuationScore({ pbPercentile: 20 }, FUND_CATEGORIES.FINANCE);
+    const roeDetail = withoutRoe.details.find((d) => d.key === 'roe');
+    assert.equal(roeDetail.contributed, false);
+    assert.equal(roeDetail.score, null);
+    assert.ok(withoutRoe.confidence < withRoe.confidence);
+  });
+
   it('null metrics → 数据不足', () => {
     const r = calculateValuationScore(null, FUND_CATEGORIES.GROWTH);
     assert.equal(r.score, null);
@@ -421,7 +465,7 @@ describe('calculateValuationScore', () => {
 describe('extractMetricsFromHoldingsValuation', () => {
   it('正常提取', () => {
     const hv = {
-      metrics: { pe: 15, pb: 2, ps: 3, peg: 1.2, epsGrowth: 20, dividendYield: 3.5 }
+      metrics: { pe: 15, pb: 2, ps: 3, peg: 1.2, epsGrowth: 20, dividendYield: 3.5, roe: 16.75 }
     };
     const m = extractMetricsFromHoldingsValuation(hv);
     assert.equal(m.pe, 15);
@@ -430,6 +474,12 @@ describe('extractMetricsFromHoldingsValuation', () => {
     assert.equal(m.peg, 1.2);
     assert.equal(m.epsGrowth, 20);
     assert.equal(m.dividendYield, 3.5);
+    assert.equal(m.roe, 16.75);
+  });
+
+  it('缺失的 roe 归一为 null', () => {
+    const m = extractMetricsFromHoldingsValuation({ metrics: { pe: 15 } });
+    assert.equal(m.roe, null);
   });
 
   it('null 字段归一为空对象', () => {

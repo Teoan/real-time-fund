@@ -23,14 +23,23 @@ app/providers/topk/
 
 ## 当前状态
 
-| 业务能力                  | 实现        | 真实 TopK 联调 |
-| ------------------------- | ----------- | -------------- |
-| searchFund                | ✅          | ❌ 待联调      |
-| getFundDetail             | ✅          | ❌ 待联调      |
-| getFundLatestNav          | ✅          | ❌ 待联调      |
-| getFundNavHistory         | ✅          | ❌ 待联调      |
-| getFundHoldings           | ✅          | ❌ 待联调      |
-| 其它（manager / rank 等） | ❌ 暂未实现 | ❌             |
+| 业务能力                  | 实现        | 真实 TopK 联调                |
+| ------------------------- | ----------- | ----------------------------- |
+| searchFund                | ✅          | ❌ 待联调                     |
+| getFundDetail             | ✅          | ✅ 2026-09-13                 |
+| getFundLatestNav          | ✅          | ❌ 待联调                     |
+| getFundNavHistory         | ✅          | ❌ 待联调                     |
+| getFundHoldings           | ✅          | ❌ 待联调                     |
+| getStockFundamentals      | ✅          | ✅ 2026-09（stock_value_em）  |
+| getStockRoe               | ✅          | ✅ 2026-09-19（新浪财务指标） |
+| 其它（manager / rank 等） | ❌ 暂未实现 | ❌                            |
+
+## 单股 ROE 兜底（getStockRoe）
+
+- **数据源**：AKShare `stock_financial_analysis_indicator`（新浪财经-财务指标），取最近一期报告的「加权净资产收益率(%)」。
+- **定位**：业务层 `app/api/fund.js` 中 ROE 以「东方财富 F10（JSONP 直连）主源 → TopK 兜底」的顺序获取，仅当 F10 不可用时才调用本方法。
+- **实测（2026-09-19）**：HTTP 200 / 约 30KB（`start_year` 限制近两年报告期）/ 约 2.4s。
+  东财口径的 `stock_financial_analysis_indicator_em` 在同一实例返回 500，未采用；`stock_financial_abstract`、`stock_zh_dupont_comparison_em` 亦可用但字段口径不如前者直接。
 
 ⚠️ **topk.xyz 域名当前并非 AKTools 服务**（验证日期 2026-08-31，主页为无关 LNMP 演示页，`/api/public/*` 全部 404）。在用户/部署方提供正确的 AKTools baseUrl 之前，所有方法调用都会通过单元测试中模拟的 fetch 通过。
 

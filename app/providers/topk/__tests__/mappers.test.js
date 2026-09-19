@@ -21,6 +21,7 @@ import {
   mapStockFundamentalLatest,
   mapStockValueRow,
   mapStockValueHistory,
+  mapStockRoe,
   __test__ as mappersInternals
 } from '../topk-mappers.js';
 
@@ -301,5 +302,46 @@ describe('mapStockValueHistory', () => {
   it('空/非数组 → 空数组', () => {
     assert.deepEqual(mapStockValueHistory([]), []);
     assert.deepEqual(mapStockValueHistory(null), []);
+  });
+});
+
+describe('mapStockRoe', () => {
+  it('取最近一期报告的加权净资产收益率', () => {
+    const out = mapStockRoe([
+      { 日期: '2025-06-30T00:00:00.000', '净资产收益率(%)': 15.1, '加权净资产收益率(%)': 14.2 },
+      { 日期: '2026-06-30T00:00:00.000', '净资产收益率(%)': 17.72, '加权净资产收益率(%)': 16.75 }
+    ]);
+    assert.equal(out, 16.75);
+  });
+
+  it('乱序输入按报告期取最新', () => {
+    const out = mapStockRoe([
+      { 日期: '2026-06-30T00:00:00.000', '加权净资产收益率(%)': 16.75 },
+      { 日期: '2025-06-30T00:00:00.000', '加权净资产收益率(%)': 14.2 }
+    ]);
+    assert.equal(out, 16.75);
+  });
+
+  it('加权列缺失时回退摊薄列', () => {
+    const out = mapStockRoe([{ 日期: '2026-06-30T00:00:00.000', '净资产收益率(%)': 17.72 }]);
+    assert.equal(out, 17.72);
+  });
+
+  it('最新一期为 NaN/NaT 时回退到上一期', () => {
+    const out = mapStockRoe([
+      { 日期: '2025-06-30T00:00:00.000', '加权净资产收益率(%)': 14.2 },
+      { 日期: '2026-06-30T00:00:00.000', '加权净资产收益率(%)': 'NaN' }
+    ]);
+    assert.equal(out, 14.2);
+  });
+
+  it('空/非数组 → null', () => {
+    assert.equal(mapStockRoe([]), null);
+    assert.equal(mapStockRoe(null), null);
+    assert.equal(mapStockRoe(undefined), null);
+  });
+
+  it('全部缺失 → null', () => {
+    assert.equal(mapStockRoe([{ 日期: '2026-06-30T00:00:00.000' }]), null);
   });
 });

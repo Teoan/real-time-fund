@@ -229,4 +229,35 @@ export const mapStockValueHistory = (rows) => {
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 };
 
+/**
+ * stock_financial_analysis_indicator 整段历史 → 最近一期报告的 ROE（%）
+ *
+ * 接口返回按报告期排列的二维表（每行一个报告期），每列一个财务指标。
+ * 取最近一期报告的「加权净资产收益率(%)」（与东财 F10 ROEJQ 同口径，实测茅台中报均为 16.75），
+ * 该列缺失时回退「净资产收益率(%)」。全部缺失返回 null。
+ *
+ * @param {Array<object>} rows
+ * @returns {number|null}
+ */
+const ROE_COLUMNS = ['加权净资产收益率(%)', '净资产收益率(%)'];
+
+export const mapStockRoe = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  // 接口本身按报告期升序返回，这里防御性再排一次，确保取到最新一期
+  const sorted = rows
+    .filter((r) => r && typeof r === 'object')
+    .sort((a, b) => {
+      const da = pickString(a['日期']) || '';
+      const db = pickString(b['日期']) || '';
+      return da < db ? -1 : da > db ? 1 : 0;
+    });
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    for (const col of ROE_COLUMNS) {
+      const v = toFiniteNumber(sorted[i][col]);
+      if (v != null) return v;
+    }
+  }
+  return null;
+};
+
 export const __test__ = { toFiniteNumber, toIsoDate, pickString, extractReportDate, parseAkShareTimestamp };

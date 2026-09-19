@@ -25,6 +25,12 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
  *     fund_fh_em: 500（TopK/AKShare 端异常）
  *     fund_etf_spot_em: 500（TopK/AKShare 端异常）
  *     fund_overview_em: 404（TopK 未暴露该接口）
+ * - 真实联调结果（2026-09-19，单股 ROE 兜底）：
+ *     stock_value_em: 200, ~700KB, ~0.8s
+ *     stock_financial_analysis_indicator: 200, ~30KB（start_year 限制后）, ~2.4s
+ *     stock_financial_analysis_indicator_em: 500（TopK/AKShare 端异常，不可用）
+ *     stock_financial_abstract: 200, ~175KB, ~1.6s
+ *     stock_zh_dupont_comparison_em: 200, ~4KB, ~0.2s
  */
 export const TOPK_DEFAULT_BASE_URL = 'https://topk.xyz/api/public';
 
@@ -65,6 +71,9 @@ export const TOPK_ENDPOINTS = Object.freeze({
   getEtfSpot: 'fund_etf_spot_em',
   // 单股估值（用于持仓穿透）：AKShare stock_value_em，单只 A 股 6 位代码
   getStockFundamentals: 'stock_value_em',
+  // 单股 ROE 兜底（用于持仓穿透）：AKShare stock_financial_analysis_indicator（新浪财经-财务指标）
+  // 注意：东财口径的 stock_financial_analysis_indicator_em 在 TopK 实例上返回 500，故改用新浪口径
+  getStockRoe: 'stock_financial_analysis_indicator',
   healthCheck: 'fund_open_fund_daily_em'
 });
 
@@ -87,6 +96,8 @@ export const TOPK_CACHE_TTL = Object.freeze({
   getFundRank: 60 * 60 * 1000,
   getEtfSpot: 60 * 1000,
   getStockFundamentals: ONE_DAY_MS,
+  // ROE 为季度财务指标，按天缓存即可（与单股估值同粒度）
+  getStockRoe: ONE_DAY_MS,
   healthCheck: 5 * 60 * 1000
 });
 

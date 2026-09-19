@@ -21,7 +21,8 @@ import {
   mapOverviewRows,
   mapSearchFundRow,
   mapStockFundamentalLatest,
-  mapStockValueHistory
+  mapStockValueHistory,
+  mapStockRoe
 } from './topk-mappers.js';
 import { createTopKClient } from './topk-client.js';
 
@@ -302,6 +303,39 @@ export function createTopKProvider(options = {}) {
   };
 
   /**
+   * 单股 ROE（加权净资产收益率，%）。用于持仓穿透估值的 ROE 指标。
+   *
+   * 数据源：AKShare stock_financial_analysis_indicator（新浪财经-财务指标）。
+   * 定位：东财 F10 直连不可用时的兜底数据源，业务层按「先 F10、后本方法」的顺序调用。
+   *
+   * 接口返回全量历史（实测约 315KB / 103 行），通过 start_year 限定近两年报告期，
+   * 将 payload 压到约 30KB；只取最近一期报告的加权 ROE。
+   *
+   * @param {string} symbol - A 股 6 位代码，如 "600519"
+   * @returns {Promise<number|null>}
+   */
+  const getStockRoe = async (symbol) => {
+    if (!isCapabilitySupported(capabilities, 'getStockRoe')) {
+      throw new TopKUnsupportedError('TopK Provider 未启用 getStockRoe');
+    }
+    const s = String(symbol || '').trim();
+    if (!/^\d{6}$/.test(s)) {
+      throw new TopKError(`stock_financial_analysis_indicator 仅接受 A 股 6 位代码: ${symbol}`);
+    }
+    const startYear = String(new Date().getFullYear() - 1);
+    return fetchCached(
+      ['topkStockRoe', s],
+      async () => {
+        const rows = await client.call(TOPK_ENDPOINTS.getStockRoe, { symbol: s, start_year: startYear });
+        const roe = mapStockRoe(rows);
+        if (roe == null) throw new FundNotFoundError(`TopK 未返回 ROE: ${s}`);
+        return roe;
+      },
+      TOPK_CACHE_TTL.getStockRoe
+    );
+  };
+
+  /**
    * 批量获取单股估值（DataLoader 模式，并发受控）。
    * @param {Array<{ symbol: string, secid?: string, market?: 'A'|'HK'|'US', code?: string, name?: string }>} targets
    * @returns {Promise<Record<string, StockFundamental|null>>}  key = symbol
@@ -333,6 +367,7 @@ export function createTopKProvider(options = {}) {
     getStockFundamentals,
     getStockFundamentalsBatch,
     getStockValueHistory,
+    getStockRoe,
     healthCheck
   };
 }

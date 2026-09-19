@@ -411,3 +411,86 @@ describe('TopK Provider - getStockValueHistory', () => {
     );
   });
 });
+
+describe('TopK Provider - getStockRoe', () => {
+  const roeRows = [
+    { 日期: '2025-06-30T00:00:00.000', '净资产收益率(%)': 15.1, '加权净资产收益率(%)': 14.2 },
+    { 日期: '2026-06-30T00:00:00.000', '净资产收益率(%)': 17.72, '加权净资产收益率(%)': 16.75 }
+  ];
+
+  it('正常响应 → 返回最近一期加权 ROE 数值', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: roeRows }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockRoe: true }
+        });
+        const out = await provider.getStockRoe('600519');
+        assert.equal(out, 16.75);
+      }
+    );
+  });
+
+  it('请求带 start_year 以限制 payload', async () => {
+    let capturedUrl = '';
+    await withMockFetch(
+      async (url) => {
+        capturedUrl = url;
+        return okJson({ success: true, data: roeRows });
+      },
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockRoe: true }
+        });
+        await provider.getStockRoe('600519');
+      }
+    );
+    assert.match(capturedUrl, /stock_financial_analysis_indicator/);
+    assert.match(capturedUrl, /symbol=600519/);
+    assert.match(capturedUrl, /start_year=\d{4}/);
+  });
+
+  it('非 6 位代码 → TopKError', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockRoe: true }
+    });
+    await assert.rejects(provider.getStockRoe('12345'), /6 位代码/);
+  });
+
+  it('能力显式禁用 → TopKUnsupportedError', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockRoe: false }
+    });
+    await assert.rejects(provider.getStockRoe('600519'), TopKUnsupportedError);
+  });
+
+  it('无 ROE 字段 → FundNotFoundError', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [{ 日期: '2026-06-30T00:00:00.000' }] }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockRoe: true }
+        });
+        await assert.rejects(provider.getStockRoe('600519'), FundNotFoundError);
+      }
+    );
+  });
+
+  it('空数据 → FundNotFoundError', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [] }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockRoe: true }
+        });
+        await assert.rejects(provider.getStockRoe('600519'), FundNotFoundError);
+      }
+    );
+  });
+});

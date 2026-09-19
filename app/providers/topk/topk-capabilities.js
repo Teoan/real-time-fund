@@ -19,6 +19,7 @@
  * @property {boolean} getEtfSpot          - ETF 实时行情
  * @property {boolean} getFundValuation    - 实时估值（与现有数据源 1/2/3 重复，暂不实现）
  * @property {boolean} getStockFundamentals - A 股个股估值指标（PE/PB/PS/PEG/市值），用于持仓穿透估值
+ * @property {boolean} getStockRoe - A 股个股 ROE（加权净资产收益率），东财 F10 直连不可用时的兜底数据源
  */
 
 const DEFAULT_CAPABILITIES = {
@@ -35,7 +36,11 @@ const DEFAULT_CAPABILITIES = {
   getFundRank: false,
   getEtfSpot: false,
   getFundValuation: false,
-  getStockFundamentals: true
+  getStockFundamentals: true,
+  // 联调通过（2026-09-19）：stock_financial_analysis_indicator 200 / ~30KB（start_year 限制后）/ ~2.4s。
+  // 作为东财 F10（主源）不可用时的 ROE 兜底；调用失败会被业务层吞掉并回落 null，不影响主流程。
+  // 注意：东财口径的 stock_financial_analysis_indicator_em 在同一实例上返回 500，不可用。
+  getStockRoe: true
 };
 
 export const TOPK_CAPABILITIES = Object.freeze({ ...DEFAULT_CAPABILITIES });

@@ -171,7 +171,11 @@ export default function FundValuationPanel({ valuation, isLoading = false }) {
           score={d.score}
           weight={d.weight}
           contributed={true}
-          suffix={d.key.endsWith('Percentile') || d.key === 'dividendYield' || d.key === 'epsGrowth' ? '%' : ''}
+          suffix={
+            d.key.endsWith('Percentile') || d.key === 'dividendYield' || d.key === 'epsGrowth' || d.key === 'roe'
+              ? '%'
+              : ''
+          }
         />
       ))}
 

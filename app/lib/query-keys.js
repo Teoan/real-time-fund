@@ -55,6 +55,12 @@ export const fundValuationLast = (fundCode) => ['fundValuationLast', String(fund
 /** @param {string} secid - 东方财富 push2 单股基本面缓存键（"1.600519"） */
 export const stockFundamentals = (secid) => ['stockFundamentals', String(secid || '').trim()];
 
+/**
+ * 单股 ROE 合并缓存键（东财 F10 主源 + TopK 兜底），值为数值或 null，key 为 6 位 A 股代码
+ * @param {string} symbol
+ */
+export const stockRoe = (symbol) => ['stockRoe', String(symbol || '').trim()];
+
 // ============================================================================
 // TopK Provider 查询键
 // ============================================================================
@@ -87,6 +93,9 @@ export const topkFundHoldings = (code, yearOrLatest) => [
 
 /** @param {string} symbol - TopK 单股估值历史序列缓存键（6 位 A 股代码） */
 export const topkStockValueHistory = (symbol) => ['topk', 'stockValueHistory', String(symbol || '').trim()];
+
+/** @param {string} symbol - TopK 单股 ROE 缓存键（6 位 A 股代码） */
+export const topkStockRoe = (symbol) => ['topk', 'stockRoe', String(symbol || '').trim()];
 
 /** TopK 健康检查（短 TTL） */
 export const topkHealth = () => ['topk', 'health'];

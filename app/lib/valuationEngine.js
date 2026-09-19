@@ -101,6 +101,28 @@ export function epsGrowthToScore(growthPct) {
 }
 
 /**
+ * ROE 评分（原始值阈值映射，行业无关的粗略口径）
+ * ROE 越高 = 盈利能力越强 = 相对越"便宜"（分越低）
+ * 数值单位为 %
+ *
+ * 注意：ROE 行业差异较大（银行 ~10%、白酒 ~30%），这里是通用阈值；
+ * 后续可改为行业基准映射或历史分位（对应 valuationRules 中的待办注释）。
+ *
+ * @param {number} roePct - 加权净资产收益率（%）
+ * @returns {number|null} 0-100 分
+ */
+export function roeToScore(roePct) {
+  if (!Number.isFinite(roePct)) return null;
+  if (roePct >= 25) return 10;
+  if (roePct >= 20) return 20;
+  if (roePct >= 15) return 35;
+  if (roePct >= 10) return 50;
+  if (roePct >= 5) return 65;
+  if (roePct >= 0) return 78;
+  return 90; // 亏损，盈利质量为负
+}
+
+/**
  * 将指标原始值转换为 0-100 分（分数越高 = 越贵）
  *
  * @param {string} key - 指标 key
@@ -133,9 +155,12 @@ export function normalizeToScore(key, value, indicatorDef) {
   if (key === 'epsGrowth') {
     return epsGrowthToScore(value);
   }
+  if (key === 'roe') {
+    return roeToScore(value);
+  }
 
   // 其他指标暂时返回 null（需要历史分位才能评分）
-  // 后续可扩展：ROE 等通过行业基准映射
+  // 后续可扩展：revenueGrowth、fcf、grossMargin 等
   return null;
 }
 
@@ -267,7 +292,8 @@ export function extractMetricsFromHoldingsValuation(holdingsValuation) {
     ps: m.ps ?? null,
     peg: m.peg ?? null,
     epsGrowth: m.epsGrowth ?? null,
-    dividendYield: m.dividendYield ?? null
+    dividendYield: m.dividendYield ?? null,
+    roe: m.roe ?? null
   };
 }
 
@@ -275,6 +301,7 @@ export const __test__ = {
   pegToScore,
   dividendYieldToScore,
   epsGrowthToScore,
+  roeToScore,
   normalizeToScore,
   computePercentile,
   scoreToRating,
