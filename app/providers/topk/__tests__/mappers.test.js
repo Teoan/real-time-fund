@@ -22,6 +22,8 @@ import {
   mapStockValueRow,
   mapStockValueHistory,
   mapStockRoe,
+  mapStockHkRoe,
+  mapStockHkValueHistory,
   __test__ as mappersInternals
 } from '../topk-mappers.js';
 
@@ -343,5 +345,66 @@ describe('mapStockRoe', () => {
 
   it('全部缺失 → null', () => {
     assert.equal(mapStockRoe([{ 日期: '2026-06-30T00:00:00.000' }]), null);
+  });
+});
+
+describe('mapStockHkRoe', () => {
+  it('取股东权益回报率(%)', () => {
+    const out = mapStockHkRoe([{ 市盈率: 14.28, '股东权益回报率(%)': 9.9663537853 }]);
+    assert.equal(out, 9.9663537853);
+  });
+
+  it('主列缺失时回退到净资产收益率(%)', () => {
+    assert.equal(mapStockHkRoe([{ '净资产收益率(%)': 8.5 }]), 8.5);
+  });
+
+  it('NaN/缺失 → null', () => {
+    assert.equal(mapStockHkRoe([{ '股东权益回报率(%)': 'NaN' }]), null);
+    assert.equal(mapStockHkRoe([{ 市盈率: 14 }]), null);
+    assert.equal(mapStockHkRoe([]), null);
+    assert.equal(mapStockHkRoe(null), null);
+  });
+});
+
+describe('mapStockHkValueHistory', () => {
+  it('eniu 形态：按 valueKey 取指标列、归一日期并升序', () => {
+    const out = mapStockHkValueHistory(
+      [
+        { date: '2022-07-13', pe: 13.76, price: 0 },
+        { date: '2006-03-23', pe: 44.77, price: 0 }
+      ],
+      'pe'
+    );
+    assert.deepEqual(out, [
+      { date: '2006-03-23', value: 44.77 },
+      { date: '2022-07-13', value: 13.76 }
+    ]);
+  });
+
+  it('不同 valueKey 取不同列（pb）', () => {
+    const out = mapStockHkValueHistory([{ date: '2022-07-13', pe: 13.76, pb: 3.17, price: 0 }], 'pb');
+    assert.deepEqual(out, [{ date: '2022-07-13', value: 3.17 }]);
+  });
+
+  it('未传 valueKey 时回退到 value 列（百度形态）', () => {
+    const out = mapStockHkValueHistory([{ date: '2026-09-19T00:00:00.000', value: 14.05 }]);
+    assert.deepEqual(out, [{ date: '2026-09-19', value: 14.05 }]);
+  });
+
+  it('非法行被丢弃', () => {
+    const out = mapStockHkValueHistory(
+      [
+        { date: 'bad', pe: 1 },
+        { date: '2022-07-13', pe: 'NaN' },
+        { date: '2022-07-12', pe: 12 }
+      ],
+      'pe'
+    );
+    assert.deepEqual(out, [{ date: '2022-07-12', value: 12 }]);
+  });
+
+  it('空/非数组 → 空数组', () => {
+    assert.deepEqual(mapStockHkValueHistory([], 'pe'), []);
+    assert.deepEqual(mapStockHkValueHistory(null, 'pe'), []);
   });
 });

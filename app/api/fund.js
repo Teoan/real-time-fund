@@ -3,7 +3,7 @@ import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { isArray, isNil, isNumber, isObject, isString } from 'lodash';
 import { storageStore } from '../stores';
-import { withRetry } from '../lib/asyncHelper';
+import { asyncPool, withRetry } from '../lib/asyncHelper';
 import { fetchWithRetry } from '../lib/fetchWithRetry';
 import { getQueryClient } from '../lib/get-query-client';
 import * as qk from '../lib/query-keys';
@@ -1556,26 +1556,47 @@ export const fetchFundData = async (c, overrideDataSource) => {
   });
 };
 
+/**
+ * 拉取东财移动端「基金持仓」原始响应（FundMNInverstPosition），带 1 小时缓存。
+ * 联接基金的目标 ETF 也复用本函数、按 ETFCODE 回源。
+ * @param {string} fundCode
+ */
+const loadFundHoldingsPayload = (fundCode) => {
+  const fc = String(fundCode || '').trim();
+  const url = `https://fundmobapi.eastmoney.com/FundMNewApi/FundMNInverstPosition?FCODE=${fc}&deviceid=Wap&plat=WAP&product=EFund&version=2.0.0`;
+  return getQueryClient().fetchQuery({
+    queryKey: qk.fundHoldingsArchives(fc),
+    queryFn: async () => {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('数据加载失败');
+      const json = await resp.json();
+      if (!json || !json.Success) throw new Error(json?.ErrMsg || '数据加载失败');
+      return json;
+    },
+    staleTime: 60 * 60 * 1000
+  });
+};
+
+/** 东财持仓响应 → 重仓股数组（GPDM/GPJC/JZBL → code/name/weight） */
+const parseFundStocksFromPayload = (json) => {
+  const out = [];
+  const fundStocks = json?.Datas?.fundStocks || [];
+  for (const s of fundStocks) {
+    const hc = String(s.GPDM || '').trim();
+    const hn = String(s.GPJC || '').trim();
+    const hw = s.JZBL ? `${s.JZBL}%` : '';
+    if (hc || hn || hw) out.push({ code: hc, name: hn, weight: hw, change: null });
+  }
+  return out;
+};
+
 export const fetchFundHoldings = async (code) => {
   if (!code) return { holdings: [], holdingsReportDate: null, holdingsIsLastQuarter: false };
   return new Promise((resolveH) => {
     fundDebugLog('fetchFundHoldings start', { code });
     // FundArchivesDatas.aspx 已失效，改用移动端 API FundMNInverstPosition
-    const holdingsUrl = `https://fundmobapi.eastmoney.com/FundMNewApi/FundMNInverstPosition?FCODE=${code}&deviceid=Wap&plat=WAP&product=EFund&version=2.0.0`;
-    getQueryClient()
-      .fetchQuery({
-        queryKey: qk.fundHoldingsArchives(code),
-        queryFn: async () => {
-          const resp = await fetch(holdingsUrl);
-          if (!resp.ok) throw new Error('数据加载失败');
-          const json = await resp.json();
-          if (!json || !json.Success) throw new Error(json?.ErrMsg || '数据加载失败');
-          return json;
-        },
-        staleTime: 60 * 60 * 1000
-      })
+    loadFundHoldingsPayload(code)
       .then(async (json) => {
-        let holdings = [];
         const holdingsReportDate = json?.Expansion || null;
         const holdingsIsLastQuarter = isLastQuarterReport(holdingsReportDate);
 
@@ -1586,16 +1607,28 @@ export const fetchFundHoldings = async (code) => {
         }
 
         // 从移动端 API 响应中解析重仓股
-        const fundStocks = json?.Datas?.fundStocks || [];
-        for (const s of fundStocks) {
-          const hc = String(s.GPDM || '').trim();
-          const hn = String(s.GPJC || '').trim();
-          const hw = s.JZBL ? `${s.JZBL}%` : '';
-          if (hc || hn || hw) {
-            holdings.push({ code: hc, name: hn, weight: hw, change: null });
+        let holdings = parseFundStocksFromPayload(json).slice(0, 10);
+
+        // 联接基金（feeder fund）不直接持股：重仓为目标 ETF，代码在顶层 ETFCODE，
+        // 此时 fundStocks 为空（实测 012349 → ETFCODE 520920 / 天弘恒生科技ETF）。
+        // 按 ETFCODE 回源目标 ETF 的持仓，使联接基金也能展示重仓并参与估值穿透。
+        let holdingsFromEtf = null;
+        if (holdings.length === 0) {
+          const etfCode = String(json?.Datas?.ETFCODE || '').trim();
+          if (/^\d{6}$/.test(etfCode) && etfCode !== String(code).trim()) {
+            try {
+              const etfJson = await loadFundHoldingsPayload(etfCode);
+              const etfHoldings = parseFundStocksFromPayload(etfJson).slice(0, 10);
+              if (etfHoldings.length > 0) {
+                holdings = etfHoldings;
+                holdingsFromEtf = {
+                  code: etfCode,
+                  name: json?.Datas?.ETFSHORTNAME != null ? String(json.Datas.ETFSHORTNAME) : null
+                };
+              }
+            } catch (e) {}
           }
         }
-        holdings = holdings.slice(0, 10);
         const normalizeTencentCode = (input) => {
           const raw = String(input || '').trim();
           if (!raw) return null;
@@ -1727,12 +1760,13 @@ export const fetchFundHoldings = async (code) => {
           assetAllocation = parsedSeries;
         } catch (e) {}
 
-        resolveH({ holdings, holdingsReportDate, holdingsIsLastQuarter, assetAllocation });
+        resolveH({ holdings, holdingsReportDate, holdingsIsLastQuarter, assetAllocation, holdingsFromEtf });
         fundDebugLog('fetchFundHoldings resolved', {
           code,
           holdingsCount: holdings?.length || 0,
           holdingsReportDate,
-          holdingsIsLastQuarter
+          holdingsIsLastQuarter,
+          holdingsFromEtf: holdingsFromEtf?.code || null
         });
       })
       .catch(() =>
@@ -2152,9 +2186,10 @@ const processStockFundamentalsQueue = async () => {
             const d = json?.data;
             // f57 缺失或空视为无效
             if (!d || !d.f57) throw new Error('empty data');
+            const market = secidMarket(secid);
             return {
               secid,
-              market: secidMarket(secid),
+              market,
               code: String(d.f57).trim(),
               name: d.f58 != null ? String(d.f58).trim() : null,
               price: parseFundamentalField(d.f43),
@@ -2165,7 +2200,8 @@ const processStockFundamentalsQueue = async () => {
               ps: parseFundamentalField(d.f165),
               dividendYield: parseFundamentalField(d.f126),
               peg: null, // push2 stock/get 无 PEG 字段，由 TopK stock_value_em 提供
-              epsGrowth: parseFundamentalField(d.f185),
+              // A 股 f185 有效；港股 f185 恒为 0（缺失哨兵值，实测腾讯/阿里/美团/汇丰等均为 0.0），置 null
+              epsGrowth: market === 'HK' ? null : parseFundamentalField(d.f185),
               updateTime: d.f86 != null ? String(d.f86) : null,
               fetchedAt: Date.now()
             };
@@ -2396,39 +2432,48 @@ const fetchEastmoneyF10Roe = (symbol6) => {
 };
 
 /**
- * 获取单只 A 股 ROE（加权净资产收益率，%）。
+ * 获取单只个股 ROE（%）。A 股与港股走不同数据源，口径一致（均为净资产收益率）。
  *
- * 数据源优先级：
+ * A 股优先级：
  *   1. 东方财富 F10 主要财务指标（浏览器端 JSONP，主源）
  *   2. TopK / AKShare stock_financial_analysis_indicator（服务端代理，兜底）
+ * 港股：
+ *   - TopK / AKShare stock_hk_financial_indicator_em（东财 F10 不覆盖港股，故无主源）
  *
- * 成功结果按 symbol 缓存 24h；两个数据源都失败时返回 null 且不缓存，便于后续重试。
+ * 成功结果按 (market, symbol) 缓存 24h；失败返回 null 且不缓存，便于后续重试。
  *
- * @param {string} symbol6 - 6 位 A 股代码
+ * @param {string} symbol - 6 位 A 股代码 / 4~5 位港股代码
+ * @param {'A'|'HK'} [market='A']
  * @returns {Promise<number|null>}
  */
-const fetchStockRoeWithFallback = (symbol6) => {
-  const s = String(symbol6 || '').trim();
-  if (!/^\d{6}$/.test(s)) return Promise.resolve(null);
+const fetchStockRoeWithFallback = (symbol, market = 'A') => {
+  const s = String(symbol || '').trim();
+  const m = market === 'HK' ? 'HK' : 'A';
+  const isValid = m === 'HK' ? /^\d{4,5}$/.test(s) : /^\d{6}$/.test(s);
+  if (!isValid) return Promise.resolve(null);
   if (typeof window === 'undefined') return Promise.resolve(null);
 
   const qc = getQueryClient();
-  const cached = qc.getQueryData(qk.stockRoe(s));
+  const queryKey = qk.stockRoe(m, s);
+  const cached = qc.getQueryData(queryKey);
   if (cached !== undefined) return Promise.resolve(cached);
 
   return qc
     .fetchQuery({
-      queryKey: qk.stockRoe(s),
+      queryKey,
       queryFn: async () => {
         let roe = null;
-        try {
-          roe = await fetchEastmoneyF10Roe(s);
-        } catch (e) {
-          roe = null;
+        // 港股无东财 F10 主要财务指标接口，直接走 TopK 的港股财务指标
+        if (m === 'A') {
+          try {
+            roe = await fetchEastmoneyF10Roe(s);
+          } catch (e) {
+            roe = null;
+          }
         }
         if (roe == null) {
           try {
-            const v = await TOPK_PROVIDER.getStockRoe(s);
+            const v = m === 'HK' ? await TOPK_PROVIDER.getStockHkRoe(s) : await TOPK_PROVIDER.getStockRoe(s);
             if (isNumber(v) && Number.isFinite(v)) roe = v;
           } catch (e) {
             roe = null;
@@ -2440,7 +2485,7 @@ const fetchStockRoeWithFallback = (symbol6) => {
     })
     .then((roe) => {
       // 失败结果不缓存，下次调用可重试
-      if (roe == null) qc.removeQueries({ queryKey: qk.stockRoe(s) });
+      if (roe == null) qc.removeQueries({ queryKey });
       return roe == null ? null : roe;
     })
     .catch(() => null);
@@ -2920,6 +2965,9 @@ export const fetchOcrDailyRemaining = async (userId, maxLimit = 5) => {
 // 基金持仓穿透估值（基金级估值倍数 = 持仓股加权）
 // ============================================================================
 
+/** 按持仓权重线性加权的指标（PE 走 E/P 倒数法，单独处理） */
+const WEIGHTED_METRIC_KEYS = ['pb', 'ps', 'peg', 'epsGrowth', 'dividendYield', 'roe'];
+
 /**
  * 解析 weight 字符串（"5.23%"）成数字百分比（5.23）
  * @param {string|number|null} weight
@@ -2939,7 +2987,7 @@ const parseWeightPercent = (weight) => {
  * @property {string|null} holdingsReportDate
  * @property {boolean} holdingsIsLastQuarter
  * @property {number} coveredWeight - 已穿透部分权重合计（%，已归一化到 100%）
- * @property {number} skippedWeight - 未穿透部分权重合计（%，含港美股/fetch 失败/未披露剩余）
+ * @property {number} skippedWeight - 未穿透部分权重合计（%，含美股/fetch 失败/未披露剩余）
  * @property {number} uncoveredWeight - 未披露剩余权重（前 10 没覆盖到的部分）
  * @property {Array<{code, name, weight, reason: 'foreign'|'fetch_failed'}>} skippedDetails
  * @property {{
@@ -3001,22 +3049,21 @@ const fetchHoldingsValuation = async (fundCode) => {
   const disclosedSum = parsed.reduce((acc, x) => acc + x.weightNum, 0);
   const uncoveredWeight = disclosedSum < 99.5 ? Math.max(0, 100 - disclosedSum) : 0;
 
-  // 3. 仅 A 股走 fetch（港美股直接归入 skipped）
-  const aStockTargets = parsed.filter((x) => x.secid && x.market === 'A');
+  // 3. A 股 / 港股走 fetch（美股与无法识别市场的持仓归入 skipped）
+  const coveredTargets = parsed.filter((x) => x.secid && (x.market === 'A' || x.market === 'HK'));
   const fundamentalsResults = await Promise.allSettled(
-    aStockTargets.map(async (x) => {
+    coveredTargets.map(async (x) => {
       const fundamental = await fetchStockFundamentalsBatched(x.secid);
       if (!fundamental || fundamental.__error) return fundamental;
-      // ROE 与估值倍数来自不同接口，单独补充（东财 F10 主源 + TopK 兜底）；
-      // 拉取失败不影响该股票其余指标
-      const roe = await fetchStockRoeWithFallback(x.code);
+      // ROE 与估值倍数来自不同接口，单独补充；拉取失败不影响该股票其余指标
+      const roe = await fetchStockRoeWithFallback(x.code, x.market);
       return roe == null ? fundamental : { ...fundamental, roe };
     })
   );
 
   const fundBySecid = new Map();
   const skippedDetails = [];
-  aStockTargets.forEach((x, idx) => {
+  coveredTargets.forEach((x, idx) => {
     const r = fundamentalsResults[idx];
     if (r.status === 'rejected' || !r.value || r.value.__error) {
       skippedDetails.push({ code: x.code, name: x.name, weight: x.weightNum, reason: 'fetch_failed' });
@@ -3025,17 +3072,15 @@ const fetchHoldingsValuation = async (fundCode) => {
     fundBySecid.set(x.secid, r.value);
   });
 
-  // 港美股全部计入 skipped
+  // 美股与无法识别市场的持仓计入 skipped（港股现已支持穿透）
   for (const x of parsed) {
-    if (x.secid && (x.market === 'HK' || x.market === 'US')) {
-      skippedDetails.push({ code: x.code, name: x.name, weight: x.weightNum, reason: 'foreign' });
-    } else if (!x.secid) {
+    if (x.market === 'US' || !x.secid) {
       skippedDetails.push({ code: x.code, name: x.name, weight: x.weightNum, reason: 'foreign' });
     }
   }
 
-  // 4. 用「已穿透 A 股」做归一化（权重合计归一到 100%）
-  const covered = aStockTargets.filter((x) => fundBySecid.has(x.secid));
+  // 4. 用「已穿透 A 股/港股」做归一化（权重合计归一到 100%）
+  const covered = coveredTargets.filter((x) => fundBySecid.has(x.secid));
   const coveredRawSum = covered.reduce((acc, x) => acc + x.weightNum, 0);
   const coveredWeight = coveredRawSum; // 仍保留为原始 % 数值，便于 UI 显示
   const skippedWeight = disclosedSum - coveredRawSum + uncoveredWeight;
@@ -3058,13 +3103,8 @@ const fetchHoldingsValuation = async (fundCode) => {
   // 5. 加权计算（用归一化权重）
   const normSum = coveredRawSum; // 原始百分比合计，下面 w = weightNum / normSum 归一到 1
   let epSum = 0;
-  let pbSum = 0,
-    psSum = 0,
-    pegSum = 0,
-    epsGrowthSum = 0,
-    dividendSum = 0,
-    roeSum = 0;
-  let roeHasValue = false;
+  const weightedSum = { pb: 0, ps: 0, peg: 0, epsGrowth: 0, dividendYield: 0, roe: 0 };
+  const weightedHas = { pb: false, ps: false, peg: false, epsGrowth: false, dividendYield: false, roe: false };
   const perStock = [];
   let latestUpdateTime = null;
 
@@ -3073,14 +3113,15 @@ const fetchHoldingsValuation = async (fundCode) => {
     const w = x.weightNum / normSum; // 归一化到 0..1
 
     if (f.pe != null && f.pe > 0) epSum += w / f.pe;
-    if (f.pb != null) pbSum += w * f.pb;
-    if (f.ps != null) psSum += w * f.ps;
-    if (f.peg != null) pegSum += w * f.peg;
-    if (f.epsGrowth != null) epsGrowthSum += w * f.epsGrowth;
-    if (f.dividendYield != null) dividendSum += w * f.dividendYield;
-    if (f.roe != null) {
-      roeSum += w * f.roe;
-      roeHasValue = true;
+    // 逐项累加并记录「是否真的取到过值」：若某指标在所有持仓上都缺失，
+    // 加权和会停留在 0，若不标记就会被下游误当成有效值参与评分
+    // （例如港股无 PEG → peg=0 被判为中性 50 分并计入置信度）。
+    for (const key of WEIGHTED_METRIC_KEYS) {
+      const v = f[key];
+      if (v != null) {
+        weightedSum[key] += w * v;
+        weightedHas[key] = true;
+      }
     }
 
     if (f.updateTime && (!latestUpdateTime || Number(f.updateTime) > Number(latestUpdateTime))) {
@@ -3092,7 +3133,7 @@ const fetchHoldingsValuation = async (fundCode) => {
       name: x.name,
       weight: x.weightNum,
       secid: x.secid,
-      market: 'A',
+      market: x.market,
       pe: f.pe,
       pb: f.pb,
       ps: f.ps,
@@ -3105,12 +3146,12 @@ const fetchHoldingsValuation = async (fundCode) => {
 
   const metrics = {
     pe: epSum > 0 ? 1 / epSum : null,
-    pb: pbSum,
-    ps: psSum,
-    peg: pegSum,
-    epsGrowth: epsGrowthSum,
-    dividendYield: dividendSum,
-    roe: roeHasValue ? roeSum : null
+    pb: weightedHas.pb ? weightedSum.pb : null,
+    ps: weightedHas.ps ? weightedSum.ps : null,
+    peg: weightedHas.peg ? weightedSum.peg : null,
+    epsGrowth: weightedHas.epsGrowth ? weightedSum.epsGrowth : null,
+    dividendYield: weightedHas.dividendYield ? weightedSum.dividendYield : null,
+    roe: weightedHas.roe ? weightedSum.roe : null
   };
 
   return {
@@ -3134,16 +3175,22 @@ const fetchHoldingsValuation = async (fundCode) => {
 /** 参与历史分位计算的估值指标（对应 stock_value_em 归一化序列的字段名） */
 const PERCENTILE_METRIC_KEYS = ['pe', 'pb', 'ps'];
 
+/** 港股参与历史分位计算的指标（stock_hk_indicator_eniu 仅支持市盈率/市净率） */
+const HK_PERCENTILE_METRIC_KEYS = ['pe', 'pb'];
+
+/** 港股历史序列预取的并发度（上游单次 6~18s，需并发以避免分钟级等待） */
+const HK_PERCENTILE_CONCURRENCY = 4;
+
 /**
  * 计算持仓股票的历史估值分位（加权平均）
  *
- * 使用 stock_value_em 近 5 年数据，计算每只 A 股在历史中的百分位，
- * 再按持仓权重加权平均，得到基金层面的历史分位。
+ * A 股：使用 stock_value_em 近 5 年数据，PE/PB/PS 三个指标共用同一序列（单只股票只请求一次）。
+ * 港股：使用 stock_hk_indicator_eniu 近 5 年数据，PE/PB 各请求一次（上游仅支持这两个指标），
+ *       单次 6~18s，故先用并发池预取全部序列，再顺序计算分位。
  *
- * 每只股票的历史序列只请求一次，PE/PB/PS 三个指标共用，
- * 避免同一份 ~700KB 历史数据被重复拉取三次。
+ * 两者均按持仓权重加权平均，得到基金层面的历史分位。
  *
- * @param {Array<{ code: string, weight: number }>} perStock - 持仓明细
+ * @param {Array<{ code: string, weight: number, market: string, pe?: number, pb?: number }>} perStock - 持仓明细
  * @returns {Promise<{ pe: number|null, pb: number|null, ps: number|null }>} 0-100 的加权分位值
  */
 const calculateHoldingsPercentiles = async (perStock) => {
@@ -3152,36 +3199,84 @@ const calculateHoldingsPercentiles = async (perStock) => {
 
   const FIVE_YEARS_MS = 5 * 365 * 24 * 60 * 60 * 1000;
   const cutoff = Date.now() - FIVE_YEARS_MS;
+  const MIN_SAMPLES = 30; // 样本太少时跳过，避免分位失真
 
   const entriesByMetric = { pe: [], pb: [], ps: [] };
 
-  for (const stock of perStock) {
-    const symbol6 = String(stock.code || '').trim();
-    if (!/^\d{6}$/.test(symbol6)) continue;
-    const weight = Number(stock.weight) || 0;
-    if (weight <= 0) continue;
-
-    let series;
-    try {
-      series = await TOPK_PROVIDER.getStockValueHistory(symbol6);
-    } catch {
-      continue; // 单只股票失败不影响整体
-    }
-    if (!isArray(series) || series.length === 0) continue;
-
-    // 取近 5 年数据
+  /** 取近 5 年数据；传入 key 时返回其数值数组，样本不足返回 null */
+  const recentSamples = (series, key) => {
+    if (!isArray(series) || series.length === 0) return null;
     const recent = series.filter((r) => {
       const ts = new Date(r.date).getTime();
       return Number.isFinite(ts) && ts > cutoff;
     });
-    if (recent.length < 30) continue; // 样本太少，跳过
+    if (recent.length < MIN_SAMPLES) return null;
+    if (!key) return recent;
+    const values = recent.map((r) => r[key]).filter((v) => Number.isFinite(v));
+    return values.length >= MIN_SAMPLES ? values : null;
+  };
+
+  // 港股序列并发预取：逐只串行（每只 2 个指标 × 6~18s）会拖到分钟级
+  const hkSeriesByKey = new Map(); // `${code}|${metric}` -> series | null
+  const hkPrefetchJobs = [];
+  for (const stock of perStock) {
+    if (stock.market !== 'HK') continue;
+    const symbol = String(stock.code || '').trim();
+    if (!/^\d{4,5}$/.test(symbol)) continue;
+    if ((Number(stock.weight) || 0) <= 0) continue;
+    for (const metricKey of HK_PERCENTILE_METRIC_KEYS) {
+      if (Number.isFinite(Number(stock[metricKey]))) hkPrefetchJobs.push([symbol, metricKey]);
+    }
+  }
+  if (hkPrefetchJobs.length > 0) {
+    await asyncPool(HK_PERCENTILE_CONCURRENCY, hkPrefetchJobs, async ([symbol, metricKey]) => {
+      try {
+        hkSeriesByKey.set(`${symbol}|${metricKey}`, await TOPK_PROVIDER.getStockHkValueHistory(symbol, metricKey));
+      } catch {
+        hkSeriesByKey.set(`${symbol}|${metricKey}`, null);
+      }
+    });
+  }
+
+  for (const stock of perStock) {
+    const symbol = String(stock.code || '').trim();
+    const weight = Number(stock.weight) || 0;
+    if (weight <= 0) continue;
+
+    // 港股：PE / PB 各自一个序列（上游亿牛网不支持市销率）
+    if (stock.market === 'HK') {
+      if (!/^\d{4,5}$/.test(symbol)) continue;
+      for (const metricKey of HK_PERCENTILE_METRIC_KEYS) {
+        const currentValue = Number(stock[metricKey]);
+        if (!Number.isFinite(currentValue)) continue;
+        const series = hkSeriesByKey.get(`${symbol}|${metricKey}`);
+        if (!isArray(series)) continue;
+        const historicalValues = recentSamples(series, 'value');
+        if (!historicalValues) continue;
+        const percentile = computePercentile(historicalValues, currentValue);
+        if (percentile != null) entriesByMetric[metricKey].push({ percentile, weight });
+      }
+      continue;
+    }
+
+    if (stock.market !== 'A') continue;
+    if (!/^\d{6}$/.test(symbol)) continue;
+
+    let series;
+    try {
+      series = await TOPK_PROVIDER.getStockValueHistory(symbol);
+    } catch {
+      continue; // 单只股票失败不影响整体
+    }
+    const recent = recentSamples(series);
+    if (!recent) continue;
 
     const latest = recent[recent.length - 1];
-    const cached = getCachedStockFundamental(symbol6);
+    const cached = getCachedStockFundamental(symbol);
 
     for (const metricKey of PERCENTILE_METRIC_KEYS) {
       const historicalValues = recent.map((r) => r[metricKey]).filter((v) => Number.isFinite(v));
-      if (historicalValues.length < 30) continue;
+      if (historicalValues.length < MIN_SAMPLES) continue;
 
       // 当前值优先取天级缓存（与持仓穿透同一口径），缺失时回退到最新一行
       const currentValue = Number.isFinite(cached?.[metricKey]) ? cached[metricKey] : latest?.[metricKey];
@@ -3211,8 +3306,8 @@ const calculateHoldingsPercentiles = async (perStock) => {
  *
  * 流程：
  *   1. 获取基金详情（类型）+ 关联板块 → 分类
- *   2. 获取持仓穿透估值（PE/PB/PS/PEG）
- *   3. 计算历史分位（使用 stock_value_em 近 5 年数据）
+ *   2. 获取持仓穿透估值（PE/PB/PS/PEG/ROE，A 股 + 港股）
+ *   3. 计算历史分位（A 股 stock_value_em / 港股 stock_hk_valuation_baidu 近 5 年数据）
  *   4. 汇总计算估值评分
  *
  * 缓存与去重由调用方（useFundValuation 的 useQuery，key 同名）负责；
@@ -3255,10 +3350,10 @@ export const fetchFundValuationScore = async (fundCode) => {
     const holdingsVal = await fetchHoldingsValuation(c);
     const metrics = extractMetricsFromHoldingsValuation(holdingsVal);
 
-    // 3. 计算历史分位（仅 A 股持仓）
-    const aStocks = (holdingsVal.perStock || []).filter((s) => s.market === 'A');
-    if (aStocks.length > 0) {
-      const percentiles = await calculateHoldingsPercentiles(aStocks);
+    // 3. 计算历史分位（A 股 / 港股持仓）
+    const stocksForPercentile = (holdingsVal.perStock || []).filter((s) => s.market === 'A' || s.market === 'HK');
+    if (stocksForPercentile.length > 0) {
+      const percentiles = await calculateHoldingsPercentiles(stocksForPercentile);
       metrics.pePercentile = percentiles.pe;
       metrics.pbPercentile = percentiles.pb;
       metrics.psPercentile = percentiles.ps;

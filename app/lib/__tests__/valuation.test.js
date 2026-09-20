@@ -455,6 +455,17 @@ describe('calculateValuationScore', () => {
     assert.ok(withoutRoe.confidence < withRoe.confidence);
   });
 
+  it('科技：仅凭 PE/PB 分位也能出分（港股科技基金唯一可得指标）', () => {
+    const r = calculateValuationScore({ pePercentile: 40, pbPercentile: 20 }, FUND_CATEGORIES.TECH);
+    const peDetail = r.details.find((d) => d.key === 'pePercentile');
+    const pbDetail = r.details.find((d) => d.key === 'pbPercentile');
+    assert.equal(peDetail.contributed, true);
+    assert.equal(pbDetail.contributed, true);
+    // (40*0.15 + 20*0.10) / 0.25 = 32
+    assert.equal(r.score, 32);
+    assert.equal(r.confidence, 25);
+  });
+
   it('null metrics → 数据不足', () => {
     const r = calculateValuationScore(null, FUND_CATEGORIES.GROWTH);
     assert.equal(r.score, null);

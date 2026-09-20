@@ -10,7 +10,13 @@
 
 export { TOPK_CAPABILITIES, isCapabilitySupported } from './topk-capabilities.js';
 
-export { TOPK_METADATA, TOPK_ENDPOINTS, TOPK_CACHE_TTL, TOPK_BASE_URL } from './topk-config.js';
+export {
+  TOPK_METADATA,
+  TOPK_ENDPOINTS,
+  TOPK_CACHE_TTL,
+  TOPK_BASE_URL,
+  TOPK_HK_VALUATION_INDICATORS
+} from './topk-config.js';
 
 export {
   TopKError,
@@ -33,7 +39,9 @@ export {
   mapStockFundamentalLatest,
   mapStockValueRow,
   mapStockValueHistory,
-  mapStockRoe
+  mapStockRoe,
+  mapStockHkRoe,
+  mapStockHkValueHistory
 } from './topk-mappers.js';
 
 export { createTopKProvider, defaultTopKProvider, TOPK_PROVIDER } from './topk-provider.js';

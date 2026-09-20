@@ -260,4 +260,50 @@ export const mapStockRoe = (rows) => {
   return null;
 };
 
+/**
+ * stock_hk_financial_indicator_em 单行快照 → 股东权益回报率（ROE，%）
+ *
+ * 港股无东财 F10 主要财务指标接口，该接口的「股东权益回报率(%)」是港股 ROE 的唯一来源。
+ *
+ * @param {Array<object>} rows
+ * @returns {number|null}
+ */
+const HK_ROE_COLUMNS = ['股东权益回报率(%)', '净资产收益率(%)'];
+
+export const mapStockHkRoe = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const row = rows.find((r) => r && typeof r === 'object');
+  if (!row) return null;
+  for (const col of HK_ROE_COLUMNS) {
+    const v = toFiniteNumber(row[col]);
+    if (v != null) return v;
+  }
+  return null;
+};
+
+/**
+ * stock_hk_indicator_eniu 单指标序列 → 按日期升序的估值历史
+ *
+ * 接口返回 [{ date, <指标键>, price }]（英文键，单指标），例如市盈率为 pe、市净率为 pb。
+ * 通过 valueKey 指定取哪个指标列，归一为统一的 { date, value } 结构并过滤非法行。
+ *
+ * @param {Array<object>} rows
+ * @param {string} [valueKey] - 指标列名（如 'pe' / 'pb'）；缺省时回退到 'value'
+ * @returns {Array<{ date: string, value: number }>}
+ */
+export const mapStockHkValueHistory = (rows, valueKey) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  return rows
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null;
+      const date = toIsoDate(row.date);
+      const hasKey = valueKey != null && Object.prototype.hasOwnProperty.call(row, valueKey);
+      const value = toFiniteNumber(hasKey ? row[valueKey] : row.value);
+      if (!date || value == null) return null;
+      return { date, value };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+};
+
 export const __test__ = { toFiniteNumber, toIsoDate, pickString, extractReportDate, parseAkShareTimestamp };

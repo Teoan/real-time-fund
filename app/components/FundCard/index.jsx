@@ -926,6 +926,11 @@ export default function Index({
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   <span className="muted">重仓股票：</span>
                   <span style={{ color: 'var(--foreground)' }}>{top10WeightSum.toFixed(2)}%</span>
+                  {topHoldings.holdingsFromEtf && (
+                    <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
+                      （来自目标 ETF {topHoldings.holdingsFromEtf.name || topHoldings.holdingsFromEtf.code}）
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span className="muted">涨跌幅 / 占比</span>
@@ -1059,6 +1064,11 @@ export default function Index({
                       <div style={{ display: 'flex', alignItems: 'center' }}>
                         <span className="muted">重仓股票：</span>
                         <span style={{ color: 'var(--foreground)' }}>{top10WeightSum.toFixed(2)}%</span>
+                        {topHoldings.holdingsFromEtf && (
+                          <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
+                            （来自目标 ETF {topHoldings.holdingsFromEtf.name || topHoldings.holdingsFromEtf.code}）
+                          </span>
+                        )}
                       </div>
                       <span className="muted">涨跌幅 / 占比</span>
                     </div>

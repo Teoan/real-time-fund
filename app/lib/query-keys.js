@@ -56,10 +56,11 @@ export const fundValuationLast = (fundCode) => ['fundValuationLast', String(fund
 export const stockFundamentals = (secid) => ['stockFundamentals', String(secid || '').trim()];
 
 /**
- * 单股 ROE 合并缓存键（东财 F10 主源 + TopK 兜底），值为数值或 null，key 为 6 位 A 股代码
+ * 单股 ROE 合并缓存键（A 股：东财 F10 主源 + TopK 兜底；港股：TopK 财务指标），值为数值或 null
+ * @param {'A'|'HK'} market
  * @param {string} symbol
  */
-export const stockRoe = (symbol) => ['stockRoe', String(symbol || '').trim()];
+export const stockRoe = (market, symbol) => ['stockRoe', String(market || 'A'), String(symbol || '').trim()];
 
 // ============================================================================
 // TopK Provider 查询键
@@ -96,6 +97,17 @@ export const topkStockValueHistory = (symbol) => ['topk', 'stockValueHistory', S
 
 /** @param {string} symbol - TopK 单股 ROE 缓存键（6 位 A 股代码） */
 export const topkStockRoe = (symbol) => ['topk', 'stockRoe', String(symbol || '').trim()];
+
+/** @param {string} symbol - TopK 港股单股 ROE 缓存键（4~5 位港股代码） */
+export const topkStockHkRoe = (symbol) => ['topk', 'stockHkRoe', String(symbol || '').trim()];
+
+/** @param {string} symbol @param {string} indicatorKey - TopK 港股单股估值历史缓存键 */
+export const topkStockHkValueHistory = (symbol, indicatorKey) => [
+  'topk',
+  'stockHkValueHistory',
+  String(symbol || '').trim(),
+  String(indicatorKey || '')
+];
 
 /** TopK 健康检查（短 TTL） */
 export const topkHealth = () => ['topk', 'health'];

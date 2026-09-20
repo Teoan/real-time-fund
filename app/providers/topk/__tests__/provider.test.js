@@ -494,3 +494,129 @@ describe('TopK Provider - getStockRoe', () => {
     );
   });
 });
+
+describe('TopK Provider - getStockHkRoe', () => {
+  it('正常响应 → 返回股东权益回报率', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [{ 市盈率: 14.28, '股东权益回报率(%)': 9.97 }] }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockHkFinancial: true }
+        });
+        assert.equal(await provider.getStockHkRoe('00700'), 9.97);
+      }
+    );
+  });
+
+  it('6 位 A 股代码 → TopKError（港股校验）', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockHkFinancial: true }
+    });
+    await assert.rejects(provider.getStockHkRoe('600519'), /港股 4~5 位代码/);
+  });
+
+  it('能力显式禁用 → TopKUnsupportedError', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockHkFinancial: false }
+    });
+    await assert.rejects(provider.getStockHkRoe('00700'), TopKUnsupportedError);
+  });
+
+  it('无 ROE 字段 → FundNotFoundError', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [{ 市盈率: 14 }] }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockHkFinancial: true }
+        });
+        await assert.rejects(provider.getStockHkRoe('00700'), FundNotFoundError);
+      }
+    );
+  });
+});
+
+describe('TopK Provider - getStockHkValueHistory', () => {
+  const hkRows = [
+    { date: '2022-07-13', pe: 13.76, price: 0 },
+    { date: '2006-03-23', pe: 44.77, price: 0 }
+  ];
+
+  it('正常响应 → 升序序列，且领域指标映射为上游指标名、代码补零加 hk 前缀', async () => {
+    let capturedUrl = '';
+    await withMockFetch(
+      async (url) => {
+        capturedUrl = url;
+        return okJson({ success: true, data: hkRows });
+      },
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockHkValueHistory: true }
+        });
+        const out = await provider.getStockHkValueHistory('00700', 'pe');
+        assert.equal(out.length, 2);
+        assert.equal(out[0].date, '2006-03-23');
+        assert.equal(out[1].value, 13.76);
+      }
+    );
+    const u = new URL(capturedUrl);
+    assert.equal(u.pathname.endsWith('/stock_hk_indicator_eniu'), true);
+    // 4~5 位代码需补零并加 hk 前缀
+    assert.equal(u.searchParams.get('symbol'), 'hk00700');
+    // 业务层只传领域字段名 'pe'，上游中文指标名不得泄漏到调用方
+    assert.equal(u.searchParams.get('indicator'), '市盈率');
+  });
+
+  it('4 位代码补零为 5 位', async () => {
+    let capturedUrl = '';
+    await withMockFetch(
+      async (url) => {
+        capturedUrl = url;
+        return okJson({ success: true, data: [{ date: '2022-07-13', pb: 3.17 }] });
+      },
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockHkValueHistory: true }
+        });
+        const out = await provider.getStockHkValueHistory('0700', 'pb');
+        assert.equal(out.length, 1);
+      }
+    );
+    assert.equal(new URL(capturedUrl).searchParams.get('symbol'), 'hk00700');
+    assert.equal(new URL(capturedUrl).searchParams.get('indicator'), '市净率');
+  });
+
+  it('不支持的指标（ps）→ TopKUnsupportedError，且不发请求', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockHkValueHistory: true }
+    });
+    await assert.rejects(provider.getStockHkValueHistory('00700', 'ps'), TopKUnsupportedError);
+  });
+
+  it('能力显式禁用 → TopKUnsupportedError', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockHkValueHistory: false }
+    });
+    await assert.rejects(provider.getStockHkValueHistory('00700', 'pe'), TopKUnsupportedError);
+  });
+
+  it('空数据 → FundNotFoundError', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [] }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockHkValueHistory: true }
+        });
+        await assert.rejects(provider.getStockHkValueHistory('00700', 'pe'), FundNotFoundError);
+      }
+    );
+  });
+});

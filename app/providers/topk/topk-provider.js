@@ -13,7 +13,7 @@
  */
 
 import { FundNotFoundError, TopKError, TopKUnsupportedError } from './topk-errors.js';
-import { TOPK_CACHE_TTL, TOPK_ENDPOINTS, TOPK_METADATA } from './topk-config.js';
+import { TOPK_CACHE_TTL, TOPK_ENDPOINTS, TOPK_HK_VALUATION_INDICATORS, TOPK_METADATA } from './topk-config.js';
 import { TOPK_CAPABILITIES, isCapabilitySupported, mergeCapabilities } from './topk-capabilities.js';
 import {
   mapHoldingRow,
@@ -22,7 +22,9 @@ import {
   mapSearchFundRow,
   mapStockFundamentalLatest,
   mapStockValueHistory,
-  mapStockRoe
+  mapStockRoe,
+  mapStockHkRoe,
+  mapStockHkValueHistory
 } from './topk-mappers.js';
 import { createTopKClient } from './topk-client.js';
 
@@ -336,6 +338,75 @@ export function createTopKProvider(options = {}) {
   };
 
   /**
+   * 港股单股 ROE（股东权益回报率，%）。用于港股持仓穿透估值。
+   *
+   * 数据源：AKShare stock_hk_financial_indicator_em（东财港股财务指标快照）。
+   * 港股无东财 F10 主要财务指标接口，故本方法为港股 ROE 的唯一来源。
+   *
+   * @param {string} symbol - 港股 4~5 位代码，如 "00700"
+   * @returns {Promise<number|null>}
+   */
+  const getStockHkRoe = async (symbol) => {
+    if (!isCapabilitySupported(capabilities, 'getStockHkFinancial')) {
+      throw new TopKUnsupportedError('TopK Provider 未启用 getStockHkFinancial');
+    }
+    const s = String(symbol || '').trim();
+    if (!/^\d{4,5}$/.test(s)) {
+      throw new TopKError(`stock_hk_financial_indicator_em 仅接受港股 4~5 位代码: ${symbol}`);
+    }
+    return fetchCached(
+      ['topkStockHkRoe', s],
+      async () => {
+        const rows = await client.call(TOPK_ENDPOINTS.getStockHkFinancial, { symbol: s });
+        const roe = mapStockHkRoe(rows);
+        if (roe == null) throw new FundNotFoundError(`TopK 未返回港股 ROE: ${s}`);
+        return roe;
+      },
+      TOPK_CACHE_TTL.getStockHkFinancial
+    );
+  };
+
+  /**
+   * 港股单股估值历史序列（用于历史分位）。
+   *
+   * 数据源：AKShare stock_hk_indicator_eniu（亿牛网），单次只返回一个指标。
+   * 仅支持 'pe' / 'pb'（该接口的市销率字段实为市值、非 PS 比率，故未纳入）。
+   * 注意：亿牛网港股个股数据止于 2022-07-13（站点已「未收录」），详见 topk-config 注释。
+   *
+   * @param {string} symbol - 港股 4~5 位代码，如 "00700"
+   * @param {'pe'|'pb'} indicatorKey - 领域指标名
+   * @returns {Promise<Array<{ date: string, value: number }>>}
+   */
+  const getStockHkValueHistory = async (symbol, indicatorKey) => {
+    if (!isCapabilitySupported(capabilities, 'getStockHkValueHistory')) {
+      throw new TopKUnsupportedError('TopK Provider 未启用 getStockHkValueHistory');
+    }
+    const s = String(symbol || '').trim();
+    if (!/^\d{4,5}$/.test(s)) {
+      throw new TopKError(`stock_hk_indicator_eniu 仅接受港股 4~5 位代码: ${symbol}`);
+    }
+    const indicator = TOPK_HK_VALUATION_INDICATORS[indicatorKey];
+    if (!indicator) {
+      throw new TopKUnsupportedError(`港股估值历史不支持指标: ${indicatorKey}`);
+    }
+    // 亿牛网要求 5 位补零 + 'hk' 前缀（如 00700 → hk00700）；缓存键沿用未补零的原始代码
+    const eniuSymbol = `hk${s.padStart(5, '0')}`;
+    return fetchCached(
+      ['topkStockHkValueHistory', s, String(indicatorKey)],
+      async () => {
+        const rows = await client.call(TOPK_ENDPOINTS.getStockHkValueHistory, {
+          symbol: eniuSymbol,
+          indicator
+        });
+        const series = mapStockHkValueHistory(rows, indicatorKey);
+        if (series.length === 0) throw new FundNotFoundError(`TopK 未返回港股估值历史: ${s}`);
+        return series;
+      },
+      TOPK_CACHE_TTL.getStockHkValueHistory
+    );
+  };
+
+  /**
    * 批量获取单股估值（DataLoader 模式，并发受控）。
    * @param {Array<{ symbol: string, secid?: string, market?: 'A'|'HK'|'US', code?: string, name?: string }>} targets
    * @returns {Promise<Record<string, StockFundamental|null>>}  key = symbol
@@ -368,6 +439,8 @@ export function createTopKProvider(options = {}) {
     getStockFundamentalsBatch,
     getStockValueHistory,
     getStockRoe,
+    getStockHkRoe,
+    getStockHkValueHistory,
     healthCheck
   };
 }

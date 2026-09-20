@@ -23,16 +23,41 @@ app/providers/topk/
 
 ## 当前状态
 
-| 业务能力                  | 实现        | 真实 TopK 联调                |
-| ------------------------- | ----------- | ----------------------------- |
-| searchFund                | ✅          | ❌ 待联调                     |
-| getFundDetail             | ✅          | ✅ 2026-09-13                 |
-| getFundLatestNav          | ✅          | ❌ 待联调                     |
-| getFundNavHistory         | ✅          | ❌ 待联调                     |
-| getFundHoldings           | ✅          | ❌ 待联调                     |
-| getStockFundamentals      | ✅          | ✅ 2026-09（stock_value_em）  |
-| getStockRoe               | ✅          | ✅ 2026-09-19（新浪财务指标） |
-| 其它（manager / rank 等） | ❌ 暂未实现 | ❌                            |
+| 业务能力                  | 实现        | 真实 TopK 联调                  |
+| ------------------------- | ----------- | ------------------------------- |
+| searchFund                | ✅          | ❌ 待联调                       |
+| getFundDetail             | ✅          | ✅ 2026-09-13                   |
+| getFundLatestNav          | ✅          | ❌ 待联调                       |
+| getFundNavHistory         | ✅          | ❌ 待联调                       |
+| getFundHoldings           | ✅          | ❌ 待联调                       |
+| getStockFundamentals      | ✅          | ✅ 2026-09（stock_value_em）    |
+| getStockRoe               | ✅          | ✅ 2026-09-19（新浪财务指标）   |
+| getStockHkFinancial       | ✅          | ✅ 2026-09-19（港股财务指标）   |
+| getStockHkValueHistory    | ✅          | ✅ 2026-09-20（亿牛网估值历史） |
+| 其它（manager / rank 等） | ❌ 暂未实现 | ❌                              |
+
+## 港股持仓穿透（getStockHkFinancial / getStockHkValueHistory）
+
+- **getStockHkFinancial**：AKShare `stock_hk_financial_indicator_em`，取「股东权益回报率(%)」作为港股 ROE。
+  东财 F10 主要财务指标不覆盖港股，故这是港股 ROE 的唯一来源。
+- **getStockHkValueHistory**：AKShare `stock_hk_indicator_eniu`（亿牛网），取市盈率 / 市净率历史序列，用于港股 PE/PB 历史分位。
+  业务层只传领域字段名 `pe` / `pb`，上游中文指标名在 `topk-config.js` 的 `TOPK_HK_VALUATION_INDICATORS` 中映射；
+  代码需补零为 5 位并加 `hk` 前缀（`00700` → `hk00700`）。
+- **实测（2026-09-20）**：financial 200 / ~0.7KB / ~0.15s；indicator_eniu 200 / ~140~190KB / 6~18s（较慢）。
+
+### ⚠️ 已知限制：eniu 港股数据止于 2022-07-13
+
+亿牛网已下线港股个股页面（`eniu.com/gu/hk00700` 返回「未收录此股票」），AKShare 只能返回存档数据 ——
+实测 00700 / 09988 / 00939 / 03690 的 PE、PB 序列**最后日期均为 2022-07-13**。
+
+配合「近 5 年」分位窗口，港股 PE/PB 分位实际基于 **2021-09 ~ 2022-07** 的区间，
+即用 2026 年的当前值与 4 年前的估值窗口比较，存在系统性偏差（这是选型时已知并接受的取舍）。
+
+- 若需要新鲜数据，应改用 `stock_hk_valuation_baidu`（数据到当日，但 2004 起仅 ~626 行、密度低）。
+  两源口径一致（304 个重合交易日，相关系数 0.967，均值 41.95 vs 41.45），也可合并使用。
+- `stock_hk_indicator_eniu` 的「市销率」返回字段实为 `market_value`（市值）而非 PS 比率，不可用于 `psPercentile`。
+- 该接口单次 6~18s，`app/api/fund.js` 的 `calculateHoldingsPercentiles` 已用 `asyncPool(4)` 并发预取，
+  但 10 只港股（每只 2 个指标 = 20 次请求）首次加载仍需约 30~60s。
 
 ## 单股 ROE 兜底（getStockRoe）
 

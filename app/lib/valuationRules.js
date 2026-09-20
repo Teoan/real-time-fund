@@ -99,15 +99,20 @@ const VALUATION_RULES = {
   },
 
   // ========== 科技/AI ==========
+  // 注：PE/PB 历史分位是港股科技基金唯一可得的指标（港股无 PEG、且市销率历史不可得），
+  // 若 TECH 规则只保留 psPercentile/peg/营收增速等，港股科技基金将无法出分。
+  // 因此纳入 pePercentile / pbPercentile，并从本就没有数据源的指标上等量下调权重。
   [FUND_CATEGORIES.TECH]: {
     name: '科技/AI',
     indicators: [
       { key: 'psPercentile', weight: 0.2 },
+      { key: 'pePercentile', weight: 0.15 },
+      { key: 'pbPercentile', weight: 0.1 },
       { key: 'peg', weight: 0.15 },
-      { key: 'revenueGrowth', weight: 0.2 },
-      { key: 'grossMargin', weight: 0.1 },
-      { key: 'fcfMargin', weight: 0.1 },
-      { key: 'roic', weight: 0.1 },
+      { key: 'revenueGrowth', weight: 0.1 },
+      { key: 'grossMargin', weight: 0.05 },
+      { key: 'fcfMargin', weight: 0.05 },
+      { key: 'roic', weight: 0.05 },
       { key: 'evSales', weight: 0.15 }
     ],
     pegThresholds: { low: 1.0, fair: 1.5, slightlyHigh: 2.0, high: 3.0 }
