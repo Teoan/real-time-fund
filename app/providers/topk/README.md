@@ -57,7 +57,9 @@ app/providers/topk/
   两源口径一致（304 个重合交易日，相关系数 0.967，均值 41.95 vs 41.45），也可合并使用。
 - `stock_hk_indicator_eniu` 的「市销率」返回字段实为 `market_value`（市值）而非 PS 比率，不可用于 `psPercentile`。
 - 该接口单次 6~18s，`app/api/fund.js` 的 `calculateHoldingsPercentiles` 已用 `asyncPool(4)` 并发预取，
-  但 10 只港股（每只 2 个指标 = 20 次请求）首次加载仍需约 30~60s。
+  且序列经 `topk-daily-cache.js` 做**天级 localStorage 缓存**（键 `topk:hkValueHistory:{symbol}:{pe|pb}`）：
+  首次加载约 20~30s，当日再次打开直接命中缓存、不再发请求。
+  缓存只写入参与分位计算的近 5 年窗口（~200 行/指标），避免 4000 行全量（约 2.8MB）占满 localStorage 配额。
 
 ## 单股 ROE 兜底（getStockRoe）
 

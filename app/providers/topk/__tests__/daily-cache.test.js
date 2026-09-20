@@ -18,8 +18,10 @@ import {
   getCachedStockFundamental,
   writeCache,
   cacheStockFundamentalFromRows,
-  cleanExpiredStockFundamentalsCache,
-  getStockFundamentalsCacheStats,
+  getCachedStockHkValueHistory,
+  writeCachedStockHkValueHistory,
+  cleanExpiredTopKCache,
+  getTopKCacheStats,
   __test__ as dailyCacheInternals
 } from '../topk-daily-cache.js';
 
@@ -138,7 +140,7 @@ describe('cacheStockFundamentalFromRows', () => {
   });
 });
 
-describe('cleanExpiredStockFundamentalsCache', () => {
+describe('cleanExpiredTopKCache', () => {
   it('清理过期条目，保留未过期条目', () => {
     writeCache('600519', { code: '600519', pe: 20 });
     writeCache('000001', { code: '000001', pe: 5 });
@@ -148,18 +150,86 @@ describe('cleanExpiredStockFundamentalsCache', () => {
     raw.ts = Date.now() - 25 * 60 * 60 * 1000;
     mockStorage.setItem('topk:stockFundamentals:600519', JSON.stringify(raw));
 
-    cleanExpiredStockFundamentalsCache();
+    cleanExpiredTopKCache();
 
     assert.equal(getCachedStockFundamental('600519'), null);
     assert.notEqual(getCachedStockFundamental('000001'), null);
   });
 });
 
-describe('getStockFundamentalsCacheStats', () => {
+describe('getTopKCacheStats', () => {
   it('返回缓存条数和字节数', () => {
     writeCache('600519', { code: '600519', pe: 20 });
     writeCache('000001', { code: '000001', pe: 5 });
-    const stats = getStockFundamentalsCacheStats();
+    const stats = getTopKCacheStats();
+    assert.equal(stats.count, 2);
+    assert.ok(stats.totalBytes > 0);
+  });
+});
+
+describe('港股估值序列天级缓存', () => {
+  const series = [
+    { date: '2021-09-20', value: 20.1 },
+    { date: '2022-07-13', value: 13.76 }
+  ];
+
+  it('写入后可读取，按 symbol + indicator 区分', () => {
+    writeCachedStockHkValueHistory('00700', 'pe', series);
+    assert.deepEqual(getCachedStockHkValueHistory('00700', 'pe'), series);
+    // 不同指标 / 不同股票互不影响
+    assert.equal(getCachedStockHkValueHistory('00700', 'pb'), null);
+    assert.equal(getCachedStockHkValueHistory('09988', 'pe'), null);
+  });
+
+  it('缓存键为 topk:hkValueHistory:{symbol}:{indicator}', () => {
+    writeCachedStockHkValueHistory('00700', 'pe', series);
+    assert.notEqual(mockStorage.getItem('topk:hkValueHistory:00700:pe'), null);
+  });
+
+  it('空数组不写入', () => {
+    writeCachedStockHkValueHistory('00700', 'pe', []);
+    assert.equal(getCachedStockHkValueHistory('00700', 'pe'), null);
+  });
+
+  it('24h 后过期', () => {
+    writeCachedStockHkValueHistory('00700', 'pe', series);
+    const raw = JSON.parse(mockStorage.getItem('topk:hkValueHistory:00700:pe'));
+    raw.ts = Date.now() - 25 * 60 * 60 * 1000;
+    mockStorage.setItem('topk:hkValueHistory:00700:pe', JSON.stringify(raw));
+    assert.equal(getCachedStockHkValueHistory('00700', 'pe'), null);
+  });
+
+  it('版本不匹配时忽略', () => {
+    mockStorage.setItem('topk:hkValueHistory:00700:pe', JSON.stringify({ _v: 999, ts: Date.now(), data: series }));
+    assert.equal(getCachedStockHkValueHistory('00700', 'pe'), null);
+  });
+
+  it('损坏的 JSON 静默忽略', () => {
+    mockStorage.setItem('topk:hkValueHistory:00700:pe', 'not-json{{{');
+    assert.equal(getCachedStockHkValueHistory('00700', 'pe'), null);
+  });
+});
+
+describe('缓存管理工具覆盖港股序列族', () => {
+  it('cleanExpiredTopKCache 同时清理两族缓存', () => {
+    writeCache('600519', { code: '600519', pe: 20 });
+    writeCachedStockHkValueHistory('00700', 'pe', [{ date: '2022-07-13', value: 13.76 }]);
+
+    // 仅让港股条目过期
+    const raw = JSON.parse(mockStorage.getItem('topk:hkValueHistory:00700:pe'));
+    raw.ts = Date.now() - 25 * 60 * 60 * 1000;
+    mockStorage.setItem('topk:hkValueHistory:00700:pe', JSON.stringify(raw));
+
+    cleanExpiredTopKCache();
+
+    assert.equal(getCachedStockHkValueHistory('00700', 'pe'), null);
+    assert.notEqual(getCachedStockFundamental('600519'), null);
+  });
+
+  it('getTopKCacheStats 同时统计两族缓存', () => {
+    writeCache('600519', { code: '600519', pe: 20 });
+    writeCachedStockHkValueHistory('00700', 'pe', [{ date: '2022-07-13', value: 13.76 }]);
+    const stats = getTopKCacheStats();
     assert.equal(stats.count, 2);
     assert.ok(stats.totalBytes > 0);
   });

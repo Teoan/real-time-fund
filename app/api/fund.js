@@ -12,7 +12,9 @@ import { isTradingDay } from '../lib/tradingCalendar';
 import { TOPK_PROVIDER } from '@/app/providers/topk';
 import {
   getCachedStockFundamental,
-  writeCache as writeStockFundamentalCache
+  getCachedStockHkValueHistory,
+  writeCache as writeStockFundamentalCache,
+  writeCachedStockHkValueHistory
 } from '@/app/providers/topk/topk-daily-cache';
 import { useSettingsStore } from '../stores/settingsStore';
 import { classifyFund } from '@/app/lib/fundClassifier';
@@ -3230,10 +3232,27 @@ const calculateHoldingsPercentiles = async (perStock) => {
   }
   if (hkPrefetchJobs.length > 0) {
     await asyncPool(HK_PERCENTILE_CONCURRENCY, hkPrefetchJobs, async ([symbol, metricKey]) => {
+      const cacheKey = `${symbol}|${metricKey}`;
       try {
-        hkSeriesByKey.set(`${symbol}|${metricKey}`, await TOPK_PROVIDER.getStockHkValueHistory(symbol, metricKey));
+        // 天级 localStorage 缓存：eniu 单次 6~18s，且其港股数据是静态的（止于 2022-07-13），
+        // 命中后二次加载不再走网络。仅缓存参与分位计算的时间窗，避免 4000 行历史占满配额。
+        const cached = getCachedStockHkValueHistory(symbol, metricKey);
+        if (cached) {
+          hkSeriesByKey.set(cacheKey, cached);
+          return;
+        }
+        const series = await TOPK_PROVIDER.getStockHkValueHistory(symbol, metricKey);
+        writeCachedStockHkValueHistory(
+          symbol,
+          metricKey,
+          series.filter((r) => {
+            const ts = new Date(r.date).getTime();
+            return Number.isFinite(ts) && ts > cutoff;
+          })
+        );
+        hkSeriesByKey.set(cacheKey, series);
       } catch {
-        hkSeriesByKey.set(`${symbol}|${metricKey}`, null);
+        hkSeriesByKey.set(cacheKey, null);
       }
     });
   }
