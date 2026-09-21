@@ -48,14 +48,48 @@ async function asyncPool(limit, iterable, iteratorFn) {
 }
 
 /**
- * 默认 no-op 缓存：每次调用都执行 queryFn。
- * 业务侧接入时应注入基于 TanStack Query 的缓存实现。
+ * 默认内存缓存：按 queryKey 记忆化（含 in-flight 去重），TTL 取调用方传入的 staleTime。
+ *
+ * 历史实现是 no-op（每次调用都直接执行 queryFn），导致 fetchCached 名不副实 ——
+ * 同一份 stock_value_em 数据（~708KB）会被 fundamentals / history 两个消费者各拉一次。
+ * 这里给出一个有界的内存实现；业务侧仍可通过 createTopKProviderForApp 注入 TanStack 缓存。
+ *
+ * @param {{ maxEntries?: number }} [options]
  */
-const defaultCache = {
-  async fetch({ queryFn }) {
-    return queryFn();
-  }
+const createMemoryCache = ({ maxEntries = 32 } = {}) => {
+  const store = new Map(); // key -> { promise, expiresAt }
+  return {
+    async fetch({ queryKey, queryFn, staleTime }) {
+      const key = JSON.stringify(queryKey);
+      const now = Date.now();
+
+      const hit = store.get(key);
+      if (hit && hit.expiresAt > now) return hit.promise;
+
+      const promise = Promise.resolve().then(queryFn);
+      const ttl = Number.isFinite(staleTime) && staleTime > 0 ? staleTime : 60 * 1000;
+      store.set(key, { promise, expiresAt: now + ttl });
+
+      // 失败不入缓存，便于调用方重试
+      promise.catch(() => {
+        if (store.get(key)?.promise === promise) store.delete(key);
+      });
+
+      // 有界：按插入顺序淘汰最旧条目（非严格 LRU，够用且简单）
+      while (store.size > maxEntries) {
+        const oldest = store.keys().next().value;
+        if (oldest === undefined || oldest === key) break;
+        store.delete(oldest);
+      }
+
+      return promise;
+    }
+  };
 };
+
+/** stock_value_em 原始行的内存驻留时长：只需覆盖 fundamentals → history 的先后调用，
+ * 长期驻留会为每只股票多占 ~708KB，故不沿用 24h。 */
+const STOCK_VALUE_ROWS_CACHE_TTL = 10 * 60 * 1000;
 
 /**
  * 创建 TopK Provider
@@ -69,7 +103,8 @@ const defaultCache = {
 export function createTopKProvider(options = {}) {
   const client = options.client || createTopKClient(options.clientOptions || {});
   const concurrency = options.concurrency ?? 4;
-  const cache = options.cache || defaultCache;
+  // 缓存按 provider 实例隔离（而非模块级单例），避免不同实例互相污染
+  const cache = options.cache || createMemoryCache();
   const capabilities = mergeCapabilities(options.capabilities);
 
   const fetchCached = (cacheKey, queryFn, staleTime) =>
@@ -242,6 +277,29 @@ export function createTopKProvider(options = {}) {
   };
 
   /**
+   * 拉取并缓存 stock_value_em 的原始历史行（单只 ~2117 行 / ~708KB）。
+   *
+   * getStockFundamentals（只取最新行）与 getStockValueHistory（要全序列算分位）
+   * 来自同一上游、同一份 payload，因此共用同一个缓存条目 ——
+   * 否则同一只股票在一次会话内会被完整拉取两次（每次 ~708KB）。
+   *
+   * @param {string} s - 已校验的 6 位 A 股代码
+   * @returns {Promise<Array<object>>}
+   */
+  const fetchStockValueRows = (s) =>
+    fetchCached(
+      ['topkStockValueEm', s],
+      async () => {
+        const rows = await client.call(TOPK_ENDPOINTS.getStockFundamentals, { symbol: s });
+        if (!Array.isArray(rows) || rows.length === 0) {
+          throw new FundNotFoundError(`TopK 未返回单股估值: ${s}`);
+        }
+        return rows;
+      },
+      STOCK_VALUE_ROWS_CACHE_TTL
+    );
+
+  /**
    * 单股估值指标（A 股 6 位代码）。用于持仓穿透估值。
    *
    * 注意：
@@ -262,16 +320,10 @@ export function createTopKProvider(options = {}) {
     if (!/^\d{6}$/.test(s)) {
       throw new TopKError(`stock_value_em 仅接受 A 股 6 位代码: ${symbol}`);
     }
-    return fetchCached(
-      ['stockFundamentals', s],
-      async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getStockFundamentals, { symbol: s });
-        const mapped = mapStockFundamentalLatest(rows, { ...ctx, code: s });
-        if (!mapped) throw new FundNotFoundError(`TopK 未返回单股估值: ${s}`);
-        return mapped;
-      },
-      TOPK_CACHE_TTL.getStockFundamentals
-    );
+    const rows = await fetchStockValueRows(s);
+    const mapped = mapStockFundamentalLatest(rows, { ...ctx, code: s });
+    if (!mapped) throw new FundNotFoundError(`TopK 未返回单股估值: ${s}`);
+    return mapped;
   };
 
   /**
@@ -292,16 +344,10 @@ export function createTopKProvider(options = {}) {
     if (!/^\d{6}$/.test(s)) {
       throw new TopKError(`stock_value_em 仅接受 A 股 6 位代码: ${symbol}`);
     }
-    return fetchCached(
-      ['stockValueHistory', s],
-      async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getStockFundamentals, { symbol: s });
-        const series = mapStockValueHistory(rows);
-        if (series.length === 0) throw new FundNotFoundError(`TopK 未返回单股估值历史: ${s}`);
-        return series;
-      },
-      TOPK_CACHE_TTL.getStockFundamentals
-    );
+    const rows = await fetchStockValueRows(s);
+    const series = mapStockValueHistory(rows);
+    if (series.length === 0) throw new FundNotFoundError(`TopK 未返回单股估值历史: ${s}`);
+    return series;
   };
 
   /**

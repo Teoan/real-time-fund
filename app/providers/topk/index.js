@@ -52,6 +52,8 @@ export {
   cacheStockFundamentalFromRows,
   getCachedStockHkValueHistory,
   writeCachedStockHkValueHistory,
+  getCachedStockValueWindow,
+  writeCachedStockValueWindow,
   cleanExpiredTopKCache,
   getTopKCacheStats
 } from './topk-daily-cache.js';

@@ -495,6 +495,91 @@ describe('TopK Provider - getStockRoe', () => {
   });
 });
 
+describe('TopK Provider - stock_value_em 共用缓存', () => {
+  const rows = [
+    {
+      数据日期: '2024-06-01T00:00:00.000',
+      当日收盘价: 100,
+      总市值: 1000000000,
+      流通市值: 800000000,
+      'PE(TTM)': 15,
+      市净率: 2,
+      市销率: 1.8,
+      PEG值: 1.2
+    },
+    {
+      数据日期: '2024-06-02T00:00:00.000',
+      当日收盘价: 102,
+      总市值: 1020000000,
+      流通市值: 820000000,
+      'PE(TTM)': 16,
+      市净率: 2.1,
+      市销率: 1.9,
+      PEG值: 1.25
+    }
+  ];
+
+  it('getStockFundamentals 与 getStockValueHistory 共用同一次上游请求', async () => {
+    let calls = 0;
+    await withMockFetch(
+      async () => {
+        calls += 1;
+        return okJson({ success: true, data: rows });
+      },
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockFundamentals: true }
+        });
+        const f = await provider.getStockFundamentals('600519', { secid: '1.600519', code: '600519' });
+        const s = await provider.getStockValueHistory('600519');
+        assert.equal(f.pe, 16);
+        assert.equal(s.length, 2);
+      }
+    );
+    assert.equal(calls, 1, '同一只股票的 stock_value_em 应只请求一次');
+  });
+
+  it('缓存按 provider 实例隔离，不跨实例复用', async () => {
+    let calls = 0;
+    await withMockFetch(
+      async () => {
+        calls += 1;
+        return okJson({ success: true, data: rows });
+      },
+      async () => {
+        const makeProvider = () =>
+          createTopKProvider({
+            client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+            capabilities: { getStockFundamentals: true }
+          });
+        await makeProvider().getStockFundamentals('600519', {});
+        await makeProvider().getStockFundamentals('600519', {});
+      }
+    );
+    assert.equal(calls, 2);
+  });
+
+  it('失败结果不缓存，可重试', async () => {
+    let calls = 0;
+    await withMockFetch(
+      async () => {
+        calls += 1;
+        return okJson({ success: true, data: [] });
+      },
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockFundamentals: true }
+        });
+        await assert.rejects(provider.getStockFundamentals('600519'), FundNotFoundError);
+        await assert.rejects(provider.getStockFundamentals('600519'), FundNotFoundError);
+      }
+    );
+    assert.equal(calls, 2, '抛错的结果不应进入缓存');
+  });
+});
+
 describe('TopK Provider - getStockHkRoe', () => {
   it('正常响应 → 返回股东权益回报率', async () => {
     await withMockFetch(

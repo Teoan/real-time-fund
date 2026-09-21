@@ -20,6 +20,8 @@ import {
   cacheStockFundamentalFromRows,
   getCachedStockHkValueHistory,
   writeCachedStockHkValueHistory,
+  getCachedStockValueWindow,
+  writeCachedStockValueWindow,
   cleanExpiredTopKCache,
   getTopKCacheStats,
   __test__ as dailyCacheInternals
@@ -232,5 +234,52 @@ describe('缓存管理工具覆盖港股序列族', () => {
     const stats = getTopKCacheStats();
     assert.equal(stats.count, 2);
     assert.ok(stats.totalBytes > 0);
+  });
+});
+
+describe('A 股分位窗口天级缓存', () => {
+  const win = {
+    values: { pe: [10, 11], pb: [1, 1.1], ps: [2, 2.1] },
+    latest: { date: '2024-06-02', pe: 11, pb: 1.1, ps: 2.1 }
+  };
+
+  it('写入后可读取，按 symbol 区分', () => {
+    writeCachedStockValueWindow('600519', win);
+    assert.deepEqual(getCachedStockValueWindow('600519'), win);
+    assert.equal(getCachedStockValueWindow('000001'), null);
+  });
+
+  it('缓存键为 topk:stockValueWindow:{symbol}', () => {
+    writeCachedStockValueWindow('600519', win);
+    assert.notEqual(mockStorage.getItem('topk:stockValueWindow:600519'), null);
+  });
+
+  it('缺少 values 时不写入', () => {
+    writeCachedStockValueWindow('600519', { latest: null });
+    assert.equal(getCachedStockValueWindow('600519'), null);
+  });
+
+  it('24h 后过期', () => {
+    writeCachedStockValueWindow('600519', win);
+    const raw = JSON.parse(mockStorage.getItem('topk:stockValueWindow:600519'));
+    raw.ts = Date.now() - 25 * 60 * 60 * 1000;
+    mockStorage.setItem('topk:stockValueWindow:600519', JSON.stringify(raw));
+    assert.equal(getCachedStockValueWindow('600519'), null);
+  });
+
+  it('损坏的 JSON 静默忽略', () => {
+    mockStorage.setItem('topk:stockValueWindow:600519', 'not-json{{{');
+    assert.equal(getCachedStockValueWindow('600519'), null);
+  });
+
+  it('清理与统计工具覆盖窗口族', () => {
+    writeCachedStockValueWindow('600519', win);
+    assert.equal(getTopKCacheStats().count, 1);
+
+    const raw = JSON.parse(mockStorage.getItem('topk:stockValueWindow:600519'));
+    raw.ts = Date.now() - 25 * 60 * 60 * 1000;
+    mockStorage.setItem('topk:stockValueWindow:600519', JSON.stringify(raw));
+    cleanExpiredTopKCache();
+    assert.equal(getCachedStockValueWindow('600519'), null);
   });
 });

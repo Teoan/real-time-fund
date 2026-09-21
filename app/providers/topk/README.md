@@ -61,6 +61,29 @@ app/providers/topk/
   首次加载约 20~30s，当日再次打开直接命中缓存、不再发请求。
   缓存只写入参与分位计算的近 5 年窗口（~200 行/指标），避免 4000 行全量（约 2.8MB）占满 localStorage 配额。
 
+## stock_value_em 全量调用降本
+
+`stock_value_em` 单只返回 **~2117 行 / ~708KB**，且上游只接受 `symbol`（加 `start_date`/`limit` 等一律 500），
+无法服务端裁剪。项目原先把它当作两个接口使用，导致同一只股票被完整拉取两次：
+
+| 消费者                 | 需要的部分       | 原缓存                                 |
+| ---------------------- | ---------------- | -------------------------------------- |
+| `getStockFundamentals` | 最新 1 行        | 内存 + localStorage 天级（只存最新行） |
+| `getStockValueHistory` | 全序列（算分位） | 仅内存 → 每次刷新重放全量              |
+
+现在改为三层：
+
+1. **Provider 共用一份原始行**：两个方法都走同一个缓存条目（key `topk:stockValueEm:{symbol}`），各自只做映射。
+   该条目内存 TTL 仅 10 分钟（`STOCK_VALUE_ROWS_CACHE_TTL`）—— ~708KB/只长期驻留不划算，
+   而两个消费者在同一次估值流程内先后调用，10 分钟绰绰有余。
+2. **业务层天级缓存「分位窗口」**：`topk:stockValueWindow:{symbol}` 只存近 5 年窗口的各指标数值数组 + 窗口最后一行
+   （`buildStockValueWindow`），刷新时不再重放全量；A 股预取同时改用 `asyncPool(4)` 并发。
+3. **Provider 默认缓存不再是 no-op**：`createTopKProvider` 现在默认按实例注入内存缓存
+   （in-flight 去重 + TTL 取 `staleTime` + 32 条上限）。此前 `defaultTopKProvider` 完全没有缓存、
+   而 `createTopKProviderForApp` 从未被调用，等于所有 TopK 请求都不缓存。
+
+效果（10 只 A 股持仓）：当天首次打开 **20 次 → 10 次**（≈14MB → ≈7MB），之后每次刷新 **10 次 → 0 次**。
+
 ## 单股 ROE 兜底（getStockRoe）
 
 - **数据源**：AKShare `stock_financial_analysis_indicator`（新浪财经-财务指标），取最近一期报告的「加权净资产收益率(%)」。

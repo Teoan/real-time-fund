@@ -13,8 +13,10 @@ import { TOPK_PROVIDER } from '@/app/providers/topk';
 import {
   getCachedStockFundamental,
   getCachedStockHkValueHistory,
+  getCachedStockValueWindow,
   writeCache as writeStockFundamentalCache,
-  writeCachedStockHkValueHistory
+  writeCachedStockHkValueHistory,
+  writeCachedStockValueWindow
 } from '@/app/providers/topk/topk-daily-cache';
 import { useSettingsStore } from '../stores/settingsStore';
 import { classifyFund } from '@/app/lib/fundClassifier';
@@ -3183,12 +3185,31 @@ const HK_PERCENTILE_METRIC_KEYS = ['pe', 'pb'];
 /** 港股历史序列预取的并发度（上游单次 6~18s，需并发以避免分钟级等待） */
 const HK_PERCENTILE_CONCURRENCY = 4;
 
+/** A 股历史序列预取的并发度（上游单次 ~0.55s / ~708KB，靠并发 + 天级缓存共同降本） */
+const A_PERCENTILE_CONCURRENCY = 4;
+
+/**
+ * 把近 5 年窗口的行序列压成分位所需的最小结构。
+ *
+ * stock_value_em 单只全量 ~2117 行 / ~708KB，但分位只需要窗口内的数值，
+ * 因此只保留各指标的数值数组 + 窗口最后一行（供当前值回退），避免落盘占满配额。
+ */
+const buildStockValueWindow = (recentRows) => {
+  const values = {};
+  for (const metricKey of PERCENTILE_METRIC_KEYS) {
+    values[metricKey] = recentRows.map((r) => r[metricKey]).filter((v) => Number.isFinite(v));
+  }
+  return { values, latest: recentRows[recentRows.length - 1] || null };
+};
+
 /**
  * 计算持仓股票的历史估值分位（加权平均）
  *
  * A 股：使用 stock_value_em 近 5 年数据，PE/PB/PS 三个指标共用同一序列（单只股票只请求一次）。
+ *       该接口单只返回 ~2117 行 / ~708KB，因此走「天级 localStorage 缓存 + 并发预取」，
+ *       缓存只落分位所需的窗口数值（见 buildStockValueWindow），刷新时不再重放全量。
  * 港股：使用 stock_hk_indicator_eniu 近 5 年数据，PE/PB 各请求一次（上游仅支持这两个指标），
- *       单次 6~18s，故先用并发池预取全部序列，再顺序计算分位。
+ *       单次 6~18s，同样并发预取 + 天级缓存。
  *
  * 两者均按持仓权重加权平均，得到基金层面的历史分位。
  *
@@ -3257,6 +3278,40 @@ const calculateHoldingsPercentiles = async (perStock) => {
     });
   }
 
+  // A 股分位窗口并发预取：命中天级缓存则完全不发请求；未命中才拉 stock_value_em（~708KB/只）
+  // 并只把「近 5 年窗口的数值」落盘，避免每次刷新重放全量。
+  const aWindowBySymbol = new Map(); // symbol -> window | null
+  const aSymbols = [];
+  for (const stock of perStock) {
+    if (stock.market !== 'A') continue;
+    const symbol = String(stock.code || '').trim();
+    if (!/^\d{6}$/.test(symbol)) continue;
+    if ((Number(stock.weight) || 0) <= 0) continue;
+    aSymbols.push(symbol);
+  }
+  if (aSymbols.length > 0) {
+    await asyncPool(A_PERCENTILE_CONCURRENCY, aSymbols, async (symbol) => {
+      try {
+        const cachedWindow = getCachedStockValueWindow(symbol);
+        if (cachedWindow) {
+          aWindowBySymbol.set(symbol, cachedWindow);
+          return;
+        }
+        const series = await TOPK_PROVIDER.getStockValueHistory(symbol);
+        const recent = recentSamples(series);
+        if (!recent) {
+          aWindowBySymbol.set(symbol, null);
+          return;
+        }
+        const window = buildStockValueWindow(recent);
+        writeCachedStockValueWindow(symbol, window);
+        aWindowBySymbol.set(symbol, window);
+      } catch {
+        aWindowBySymbol.set(symbol, null); // 单只股票失败不影响整体
+      }
+    });
+  }
+
   for (const stock of perStock) {
     const symbol = String(stock.code || '').trim();
     const weight = Number(stock.weight) || 0;
@@ -3281,23 +3336,17 @@ const calculateHoldingsPercentiles = async (perStock) => {
     if (stock.market !== 'A') continue;
     if (!/^\d{6}$/.test(symbol)) continue;
 
-    let series;
-    try {
-      series = await TOPK_PROVIDER.getStockValueHistory(symbol);
-    } catch {
-      continue; // 单只股票失败不影响整体
-    }
-    const recent = recentSamples(series);
-    if (!recent) continue;
+    const window = aWindowBySymbol.get(symbol);
+    if (!window) continue;
 
-    const latest = recent[recent.length - 1];
     const cached = getCachedStockFundamental(symbol);
+    const latest = window.latest;
 
     for (const metricKey of PERCENTILE_METRIC_KEYS) {
-      const historicalValues = recent.map((r) => r[metricKey]).filter((v) => Number.isFinite(v));
-      if (historicalValues.length < MIN_SAMPLES) continue;
+      const historicalValues = window.values?.[metricKey];
+      if (!isArray(historicalValues) || historicalValues.length < MIN_SAMPLES) continue;
 
-      // 当前值优先取天级缓存（与持仓穿透同一口径），缺失时回退到最新一行
+      // 当前值优先取天级缓存（与持仓穿透同一口径），缺失时回退到窗口最后一行
       const currentValue = Number.isFinite(cached?.[metricKey]) ? cached[metricKey] : latest?.[metricKey];
       if (!Number.isFinite(currentValue)) continue;
 

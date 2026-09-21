@@ -19,6 +19,11 @@
  *   value: { data: [{ date, value }], ts: 1725744000000 }
  *   ⚠️ 仅缓存参与分位计算的时间窗（近 5 年 ~200 行），全量 4000 行会占满配额。
  *
+ * A 股分位窗口（stock_value_em 单次 ~708KB / 2117 行，但分位只需近 5 年窗口）：
+ *   key: "topk:stockValueWindow:{symbol}"
+ *   value: { data: { values: { pe: number[], pb: number[], ps: number[] }, latest: row }, ts }
+ *   ⚠️ 只落数值数组 + 最后一行，全量落盘约 708KB/只会迅速占满配额。
+ *
  * 注意：
  *   - 仅在浏览器环境使用（localStorage 不存在于 SSR）
  *   - 缓存键按 symbol（6 位代码），不按 secid（避免 1.600519 vs 0.000001 重复存储）
@@ -28,10 +33,19 @@
 const CACHE_PREFIX = 'topk:stockFundamentals:';
 /** 港股估值序列缓存前缀（键：`topk:hkValueHistory:{symbol}:{indicator}`） */
 const HK_CACHE_PREFIX = 'topk:hkValueHistory:';
+/** A 股分位窗口缓存前缀（键：`topk:stockValueWindow:{symbol}`） */
+const VALUE_WINDOW_CACHE_PREFIX = 'topk:stockValueWindow:';
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 小时强制过期
 const CACHE_VERSION = 1;
 const HK_CACHE_VERSION = 1;
-const CACHE_PREFIXES = [CACHE_PREFIX, HK_CACHE_PREFIX];
+const VALUE_WINDOW_CACHE_VERSION = 1;
+/** 缓存前缀 → 期望版本（清理工具按族校验版本） */
+const CACHE_FAMILIES = {
+  [CACHE_PREFIX]: CACHE_VERSION,
+  [HK_CACHE_PREFIX]: HK_CACHE_VERSION,
+  [VALUE_WINDOW_CACHE_PREFIX]: VALUE_WINDOW_CACHE_VERSION
+};
+const CACHE_PREFIXES = Object.keys(CACHE_FAMILIES);
 
 /**
  * 从 stock_value_em 的历史序列中提取最新一行并映射为 StockFundamental。
@@ -167,6 +181,30 @@ export const writeCachedStockHkValueHistory = (symbol, indicator, series) => {
 };
 
 /**
+ * 查询 A 股分位窗口的天级缓存。
+ * 结构见模块头注释：只保存近 5 年窗口的各指标数值数组 + 窗口最后一行。
+ *
+ * @param {string} symbol - 6 位 A 股代码
+ * @returns {{ values: { pe: number[], pb: number[], ps: number[] }, latest: object|null }|null}
+ */
+export const getCachedStockValueWindow = (symbol) =>
+  readEntry(`${VALUE_WINDOW_CACHE_PREFIX}${String(symbol || '').trim()}`, VALUE_WINDOW_CACHE_VERSION);
+
+/**
+ * 写入 A 股分位窗口的天级缓存。
+ *
+ * ⚠️ 调用方必须只写入「分位所需的时间窗」（近 5 年），不要落 stock_value_em 全量：
+ * 全量 2117 行 ≈ 708KB/只，10 只持仓会迅速占满 localStorage 配额。
+ *
+ * @param {string} symbol - 6 位 A 股代码
+ * @param {{ values: { pe: number[], pb: number[], ps: number[] }, latest: object|null }} window
+ */
+export const writeCachedStockValueWindow = (symbol, window) => {
+  if (!window || !window.values) return;
+  writeEntry(`${VALUE_WINDOW_CACHE_PREFIX}${String(symbol || '').trim()}`, VALUE_WINDOW_CACHE_VERSION, window);
+};
+
+/**
  * 清理过期缓存（可选调用，避免 localStorage 积累过多垃圾）。
  * 覆盖本模块全部缓存族：单股估值最新行 + 港股估值序列。
  */
@@ -176,8 +214,10 @@ export const cleanExpiredTopKCache = () => {
     const keysToDelete = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (!key || !CACHE_PREFIXES.some((p) => key.startsWith(p))) continue;
-      const expectedVersion = key.startsWith(HK_CACHE_PREFIX) ? HK_CACHE_VERSION : CACHE_VERSION;
+      if (!key) continue;
+      const family = CACHE_PREFIXES.find((p) => key.startsWith(p));
+      if (!family) continue;
+      const expectedVersion = CACHE_FAMILIES[family];
       try {
         const raw = localStorage.getItem(key);
         if (!raw) continue;
@@ -243,7 +283,9 @@ export const __test__ = {
   extractLatestRow,
   CACHE_PREFIX,
   HK_CACHE_PREFIX,
+  VALUE_WINDOW_CACHE_PREFIX,
   CACHE_MAX_AGE_MS,
   CACHE_VERSION,
-  HK_CACHE_VERSION
+  HK_CACHE_VERSION,
+  VALUE_WINDOW_CACHE_VERSION
 };

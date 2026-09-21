@@ -92,8 +92,11 @@ export const topkFundHoldings = (code, yearOrLatest) => [
   String(yearOrLatest || 'latest')
 ];
 
-/** @param {string} symbol - TopK 单股估值历史序列缓存键（6 位 A 股代码） */
-export const topkStockValueHistory = (symbol) => ['topk', 'stockValueHistory', String(symbol || '').trim()];
+/**
+ * stock_value_em 原始历史行缓存键（getStockFundamentals 与 getStockValueHistory 共用同一份数据）
+ * @param {string} symbol - 6 位 A 股代码
+ */
+export const topkStockValueEm = (symbol) => ['topk', 'stockValueEm', String(symbol || '').trim()];
 
 /** @param {string} symbol - TopK 单股 ROE 缓存键（6 位 A 股代码） */
 export const topkStockRoe = (symbol) => ['topk', 'stockRoe', String(symbol || '').trim()];
