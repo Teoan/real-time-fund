@@ -56,7 +56,7 @@ export const fundValuationLast = (fundCode) => ['fundValuationLast', String(fund
 export const stockFundamentals = (secid) => ['stockFundamentals', String(secid || '').trim()];
 
 /**
- * 单股 ROE 合并缓存键（A 股：东财 F10 主源 + TopK 兜底；港股：TopK 财务指标），值为数值或 null
+ * 单股 ROE 合并缓存键（A 股：东财 F10 主源 + AKTools 兜底；港股：AKTools 财务指标），值为数值或 null
  * @param {'A'|'HK'} market
  * @param {string} symbol
  */
@@ -69,21 +69,21 @@ export const stockRoe = (market, symbol) => ['stockRoe', String(market || 'A'), 
 export const stockUsFinancial = (symbol) => ['stockUsFinancial', String(symbol || '').trim()];
 
 // ============================================================================
-// TopK Provider 查询键
+// AKTools Provider 查询键
 // ============================================================================
 
 /** @param {string} keyword */
-export const topkSearchFund = (keyword) => ['topk', 'searchFund', String(keyword || '').trim()];
+export const aktoolsSearchFund = (keyword) => ['aktools', 'searchFund', String(keyword || '').trim()];
 
 /** @param {string} code */
-export const topkFundDetail = (code) => ['topk', 'fundDetail', String(code).trim()];
+export const aktoolsFundDetail = (code) => ['aktools', 'fundDetail', String(code).trim()];
 
 /** @param {string} code */
-export const topkFundLatestNav = (code) => ['topk', 'fundLatestNav', String(code).trim()];
+export const aktoolsFundLatestNav = (code) => ['aktools', 'fundLatestNav', String(code).trim()];
 
 /** @param {string} code @param {string} sdate @param {string} edate */
-export const topkFundNavHistory = (code, sdate, edate) => [
-  'topk',
+export const aktoolsFundNavHistory = (code, sdate, edate) => [
+  'aktools',
   'fundNavHistory',
   String(code).trim(),
   String(sdate || ''),
@@ -91,8 +91,8 @@ export const topkFundNavHistory = (code, sdate, edate) => [
 ];
 
 /** @param {string} code @param {string} yearOrLatest */
-export const topkFundHoldings = (code, yearOrLatest) => [
-  'topk',
+export const aktoolsFundHoldings = (code, yearOrLatest) => [
+  'aktools',
   'fundHoldings',
   String(code).trim(),
   String(yearOrLatest || 'latest')
@@ -102,27 +102,27 @@ export const topkFundHoldings = (code, yearOrLatest) => [
  * stock_value_em 原始历史行缓存键（getStockFundamentals 与 getStockValueHistory 共用同一份数据）
  * @param {string} symbol - 6 位 A 股代码
  */
-export const topkStockValueEm = (symbol) => ['topk', 'stockValueEm', String(symbol || '').trim()];
+export const aktoolsStockValueEm = (symbol) => ['aktools', 'stockValueEm', String(symbol || '').trim()];
 
-/** @param {string} symbol - TopK 单股 ROE 缓存键（6 位 A 股代码） */
-export const topkStockRoe = (symbol) => ['topk', 'stockRoe', String(symbol || '').trim()];
+/** @param {string} symbol - AKTools 单股 ROE 缓存键（6 位 A 股代码） */
+export const aktoolsStockRoe = (symbol) => ['aktools', 'stockRoe', String(symbol || '').trim()];
 
-/** @param {string} symbol - TopK 港股单股 ROE 缓存键（4~5 位港股代码） */
-export const topkStockHkRoe = (symbol) => ['topk', 'stockHkRoe', String(symbol || '').trim()];
+/** @param {string} symbol - AKTools 港股单股 ROE 缓存键（4~5 位港股代码） */
+export const aktoolsStockHkRoe = (symbol) => ['aktools', 'stockHkRoe', String(symbol || '').trim()];
 
-/** @param {string} symbol - TopK 美股单股财务指标缓存键（美股代码，如 AAPL） */
-export const topkStockUsFinancial = (symbol) => ['topk', 'topkStockUsFinancial', String(symbol || '').trim()];
+/** @param {string} symbol - AKTools 美股单股财务指标缓存键（美股代码，如 AAPL） */
+export const aktoolsStockUsFinancial = (symbol) => ['aktools', 'aktoolsStockUsFinancial', String(symbol || '').trim()];
 
-/** @param {string} symbol @param {string} indicatorKey - TopK 港股单股估值历史缓存键 */
-export const topkStockHkValueHistory = (symbol, indicatorKey) => [
-  'topk',
+/** @param {string} symbol @param {string} indicatorKey - AKTools 港股单股估值历史缓存键 */
+export const aktoolsStockHkValueHistory = (symbol, indicatorKey) => [
+  'aktools',
   'stockHkValueHistory',
   String(symbol || '').trim(),
   String(indicatorKey || '')
 ];
 
-/** TopK 健康检查（短 TTL） */
-export const topkHealth = () => ['topk', 'health'];
+/** AKTools 健康检查（短 TTL） */
+export const aktoolsHealth = () => ['aktools', 'health'];
 
 /** @param {string} fundCode - 基金估值评分缓存键 */
 export const fundValuationScore = (fundCode) => ['fundValuationScore', String(fundCode || '').trim()];

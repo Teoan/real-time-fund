@@ -29,8 +29,8 @@ export default function SettingsModal({
   dynamicStyleMobile = true,
   showGroupDropdownPc = false,
   showGroupDropdownMobile = false,
-  topkStockFundamentalsEnabled = false,
-  setTopkStockFundamentalsEnabled
+  aktoolsStockFundamentalsEnabled = false,
+  setAktoolsStockFundamentalsEnabled
 }) {
   const isMobile = useIsMobile();
   const [sliderDragging, setSliderDragging] = useState(false);
@@ -45,8 +45,9 @@ export default function SettingsModal({
   const [localDynamicStyleMobile, setLocalDynamicStyleMobile] = useState(dynamicStyleMobile);
   const [localShowGroupDropdownPc, setLocalShowGroupDropdownPc] = useState(showGroupDropdownPc);
   const [localShowGroupDropdownMobile, setLocalShowGroupDropdownMobile] = useState(showGroupDropdownMobile);
-  const [localTopkStockFundamentalsEnabled, setLocalTopkStockFundamentalsEnabled] =
-    useState(topkStockFundamentalsEnabled);
+  const [localAktoolsStockFundamentalsEnabled, setLocalAktoolsStockFundamentalsEnabled] = useState(
+    aktoolsStockFundamentalsEnabled
+  );
   const [localContainerWidth, setLocalContainerWidth] = useState(containerWidth);
   const pageWidthTrackRef = useRef(null);
   const [viewWidth, setViewWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
@@ -126,8 +127,8 @@ export default function SettingsModal({
   }, [showGroupDropdownMobile]);
 
   useEffect(() => {
-    setLocalTopkStockFundamentalsEnabled(topkStockFundamentalsEnabled);
-  }, [topkStockFundamentalsEnabled]);
+    setLocalAktoolsStockFundamentalsEnabled(aktoolsStockFundamentalsEnabled);
+  }, [aktoolsStockFundamentalsEnabled]);
 
   useEffect(() => {
     setLocalContainerWidth(containerWidth);
@@ -338,27 +339,27 @@ export default function SettingsModal({
             }}
           >
             <div className="muted" style={{ marginBottom: 4, fontSize: '0.8rem', fontWeight: 600 }}>
-              数据源 · TopK / AKTools
+              数据源 · AKTools
             </div>
             <div className="muted" style={{ marginBottom: 12, fontSize: '0.75rem', lineHeight: 1.5 }}>
-              开启后，基金持仓穿透估值的 A 股单股指标（PE/PB/PS/PEG/市值）将改由 TopK / AKTools （AKShare
+              开启后，基金持仓穿透估值的 A 股单股指标（PE/PB/PS/PEG/市值）将改由 AKTools （AKShare
               stock_value_em）提供。港股与美股的估值倍数仍走东财通道；美股的 ROE / 盈利增速 / 营收增速固定由
-              TopK（stock_financial_us_analysis_indicator_em）提供，不受此开关影响。关闭时维持原行为。
+              AKTools（stock_financial_us_analysis_indicator_em）提供，不受此开关影响。关闭时维持原行为。
             </div>
             <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
               <div className="muted" style={{ fontSize: '0.8rem' }}>
-                启用 TopK 单股估值（仅 A 股）
+                启用 AKTools 单股估值（仅 A 股）
               </div>
               <Switch
-                checked={Boolean(localTopkStockFundamentalsEnabled)}
+                checked={Boolean(localAktoolsStockFundamentalsEnabled)}
                 className="scale-125"
                 onCheckedChange={(checked) => {
-                  setLocalTopkStockFundamentalsEnabled(Boolean(checked));
-                  if (typeof setTopkStockFundamentalsEnabled === 'function') {
-                    setTopkStockFundamentalsEnabled(Boolean(checked));
+                  setLocalAktoolsStockFundamentalsEnabled(Boolean(checked));
+                  if (typeof setAktoolsStockFundamentalsEnabled === 'function') {
+                    setAktoolsStockFundamentalsEnabled(Boolean(checked));
                   }
                 }}
-                aria-label="启用 TopK 单股估值"
+                aria-label="启用 AKTools 单股估值"
               />
             </div>
           </div>
@@ -406,7 +407,7 @@ export default function SettingsModal({
                   isMobile ? localDynamicStyleMobile : localDynamicStylePc,
                   localContainerWidth,
                   isMobile ? localShowGroupDropdownMobile : localShowGroupDropdownPc,
-                  localTopkStockFundamentalsEnabled
+                  localAktoolsStockFundamentalsEnabled
                 )
               }
               disabled={localSeconds < 30}

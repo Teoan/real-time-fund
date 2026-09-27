@@ -1,5 +1,5 @@
 /**
- * TopK (AKTools) HTTP Client
+ * AKTools (AKTools) HTTP Client
  *
  * 单一职责：构造 fetch、注入超时/重试、把 AKTools 返回的 DataFrame JSON
  * 标准化为合法 JSON（NaN/NaT → null、numpy 数字 → number）。
@@ -9,14 +9,14 @@
 
 import {
   FundNotFoundError,
-  TopKApiError,
-  TopKError,
-  TopKParseError,
-  TopKRateLimitError,
-  TopKTimeoutError,
-  TopKUnavailableError
-} from './topk-errors.js';
-import { TOPK_BASE_URL, TOPK_REQUEST_RETRIES, TOPK_REQUEST_TIMEOUT_MS } from './topk-config.js';
+  AktoolsApiError,
+  AktoolsError,
+  AktoolsParseError,
+  AktoolsRateLimitError,
+  AktoolsTimeoutError,
+  AktoolsUnavailableError
+} from './aktools-errors.js';
+import { AKTOOLS_BASE_URL, AKTOOLS_REQUEST_RETRIES, AKTOOLS_REQUEST_TIMEOUT_MS } from './aktools-config.js';
 
 const _isNil = (v) => v == null;
 
@@ -39,7 +39,7 @@ const sanitizeAkShareValue = (value) => {
     if (value === '' || value.toLowerCase() === 'nan' || value.toLowerCase() === 'nat') {
       return null;
     }
-    // TopK / AKShare 响应偶发包含控制字符（实测 fund_open_fund_daily_em ~3.5MB 后出现），
+    // AKTools / AKShare 响应偶发包含控制字符（实测 fund_open_fund_daily_em ~3.5MB 后出现），
     // 直接 JSON.parse 会抛 Invalid control character；这里 strip 掉除 \n \r \t 之外的控制字符。
     if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(value)) {
       return value.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
@@ -80,7 +80,7 @@ const deepCloneJsonSafe = (value) => {
  */
 const fetchWithTimeout = async (url, { timeoutMs, signal, ...rest } = {}) => {
   if (typeof fetch === 'undefined') {
-    throw new TopKUnavailableError('当前环境无 fetch', { code: 'NO_FETCH' });
+    throw new AktoolsUnavailableError('当前环境无 fetch', { code: 'NO_FETCH' });
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -88,20 +88,20 @@ const fetchWithTimeout = async (url, { timeoutMs, signal, ...rest } = {}) => {
     return await fetch(url, { ...rest, signal: signal || controller.signal });
   } catch (e) {
     if (e?.name === 'AbortError') {
-      throw new TopKTimeoutError(`TopK 请求超时 (${timeoutMs}ms): ${url}`);
+      throw new AktoolsTimeoutError(`AKTools 请求超时 (${timeoutMs}ms): ${url}`);
     }
-    throw new TopKUnavailableError(`TopK 网络错误: ${e?.message || e}`, { cause: e });
+    throw new AktoolsUnavailableError(`AKTools 网络错误: ${e?.message || e}`, { cause: e });
   } finally {
     clearTimeout(timer);
   }
 };
 
 /**
- * 在重试失败时抛出归一化的 TopK 错误。
+ * 在重试失败时抛出归一化的 AKTools 错误。
  */
 const wrapFinalError = (err, url) => {
-  if (err instanceof TopKError) return err;
-  return new TopKUnavailableError(`TopK 调用失败: ${err?.message || err}`, { cause: err });
+  if (err instanceof AktoolsError) return err;
+  return new AktoolsUnavailableError(`AKTools 调用失败: ${err?.message || err}`, { cause: err });
 };
 
 const buildUrl = (baseUrl, fn, params) => {
@@ -123,7 +123,7 @@ const buildUrl = (baseUrl, fn, params) => {
 };
 
 /**
- * 创建 TopK 客户端。
+ * 创建 AKTools 客户端。
  * 可注入 baseUrl 以便测试（默认从环境变量 / 常量读取）。
  *
  * @param {object} [options]
@@ -132,14 +132,14 @@ const buildUrl = (baseUrl, fn, params) => {
  * @param {number} [options.retries]
  * @returns {{ call: (fn: string, params?: object) => Promise<any>, healthCheck: () => Promise<object> }}
  */
-export function createTopKClient(options = {}) {
-  const baseUrl = options.baseUrl || TOPK_BASE_URL;
-  const timeoutMs = options.timeoutMs ?? TOPK_REQUEST_TIMEOUT_MS;
-  const retries = options.retries ?? TOPK_REQUEST_RETRIES;
+export function createAktoolsClient(options = {}) {
+  const baseUrl = options.baseUrl || AKTOOLS_BASE_URL;
+  const timeoutMs = options.timeoutMs ?? AKTOOLS_REQUEST_TIMEOUT_MS;
+  const retries = options.retries ?? AKTOOLS_REQUEST_RETRIES;
 
   const call = async (fn, params) => {
     if (!fn || typeof fn !== 'string') {
-      throw new TopKApiError('TopK 调用必须提供 AKShare 函数名', { status: 0 });
+      throw new AktoolsApiError('AKTools 调用必须提供 AKShare 函数名', { status: 0 });
     }
     const url = buildUrl(baseUrl, fn, params);
     let lastErr = null;
@@ -147,20 +147,20 @@ export function createTopKClient(options = {}) {
       try {
         const res = await fetchWithTimeout(url, { timeoutMs });
         if (res.status === 429) {
-          throw new TopKRateLimitError(`TopK 限流: ${url}`);
+          throw new AktoolsRateLimitError(`AKTools 限流: ${url}`);
         }
         if (res.status === 404) {
-          throw new FundNotFoundError(`TopK 接口不存在或基金不存在: ${url}`);
+          throw new FundNotFoundError(`AKTools 接口不存在或基金不存在: ${url}`);
         }
         if (!res.ok) {
-          throw new TopKApiError(`TopK HTTP ${res.status}: ${url}`, { status: res.status });
+          throw new AktoolsApiError(`AKTools HTTP ${res.status}: ${url}`, { status: res.status });
         }
 
         let json;
         try {
           json = await res.json();
         } catch (e) {
-          throw new TopKParseError(`TopK 响应不是合法 JSON: ${url}`, { cause: e });
+          throw new AktoolsParseError(`AKTools 响应不是合法 JSON: ${url}`, { cause: e });
         }
 
         // AKTools 返回顶层通常为 { success: true, data: [...] }，部分接口直接返回数组。
@@ -173,10 +173,10 @@ export function createTopKClient(options = {}) {
         lastErr = e;
         // 不可重试的错误：超时/限流/能力不支持/接口不存在/解析失败
         if (
-          e instanceof TopKTimeoutError ||
-          e instanceof TopKRateLimitError ||
+          e instanceof AktoolsTimeoutError ||
+          e instanceof AktoolsRateLimitError ||
           e instanceof FundNotFoundError ||
-          e instanceof TopKParseError
+          e instanceof AktoolsParseError
         ) {
           throw e;
         }
@@ -201,7 +201,7 @@ export function createTopKClient(options = {}) {
         available: false,
         latency: Date.now() - start,
         checkedAt: new Date().toISOString(),
-        error: e instanceof TopKError ? e.message : String(e?.message || e)
+        error: e instanceof AktoolsError ? e.message : String(e?.message || e)
       };
     }
   };

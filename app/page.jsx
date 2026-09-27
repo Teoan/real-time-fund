@@ -209,8 +209,8 @@ export default function HomePage() {
     setShowGroupDropdownMobile,
     isGroupSummarySticky,
     setIsGroupSummarySticky,
-    topkStockFundamentalsEnabled,
-    setTopkStockFundamentalsEnabled,
+    aktoolsStockFundamentalsEnabled,
+    setAktoolsStockFundamentalsEnabled,
     syncFromCustomSettings
   } = useSettingsStore();
 
@@ -3492,7 +3492,7 @@ export default function HomePage() {
     dynamicStyleOverride,
     containerWidthOverride,
     showGroupDropdownOverride,
-    topkStockFundamentalsOverride
+    aktoolsStockFundamentalsOverride
   ) => {
     e?.preventDefault?.();
     const seconds = secondsOverride ?? tempSeconds;
@@ -3533,10 +3533,10 @@ export default function HomePage() {
     if (targetIsMobile) setShowGroupDropdownMobile(nextShowGroupDropdown);
     else setShowGroupDropdownPc(nextShowGroupDropdown);
 
-    const nextTopkStockFundamentals = isBoolean(topkStockFundamentalsOverride)
-      ? topkStockFundamentalsOverride
-      : topkStockFundamentalsEnabled;
-    setTopkStockFundamentalsEnabled(nextTopkStockFundamentals);
+    const nextAktoolsStockFundamentals = isBoolean(aktoolsStockFundamentalsOverride)
+      ? aktoolsStockFundamentalsOverride
+      : aktoolsStockFundamentalsEnabled;
+    setAktoolsStockFundamentalsEnabled(nextAktoolsStockFundamentals);
 
     // 在移动端不裁剪也不修改 pcContainerWidth，直接保留原值
     let w = Number(containerWidthOverride ?? containerWidth) || 1200;
@@ -3549,7 +3549,7 @@ export default function HomePage() {
       const parsed = useStorageStore.getState().customSettings || {};
       const base = {
         ...parsed,
-        topkStockFundamentalsEnabled: nextTopkStockFundamentals
+        aktoolsStockFundamentalsEnabled: nextAktoolsStockFundamentals
       };
       if (targetIsMobile) {
         // 仅更新当前运行端对应的开关键，不覆盖 PC 端宽度
@@ -4286,8 +4286,8 @@ export default function HomePage() {
     dynamicStyleMobile,
     showGroupDropdownPc,
     showGroupDropdownMobile,
-    topkStockFundamentalsEnabled,
-    setTopkStockFundamentalsEnabled,
+    aktoolsStockFundamentalsEnabled,
+    setAktoolsStockFundamentalsEnabled,
     scanProgress: scanProgress ?? { stage: 'ocr', current: 0, total: 0 },
     scanImportProgress: scanImportProgress ?? { current: 0, total: 0, success: 0, failed: 0 },
     // Refs

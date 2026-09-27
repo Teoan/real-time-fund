@@ -65,6 +65,8 @@ jobs:
           NEXT_PUBLIC_IS_GITHUB_LOGIN=${{ secrets.NEXT_PUBLIC_IS_GITHUB_LOGIN }}
           NEXT_PUBLIC_SENTRY_DSN=${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
           SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}
+          # AKTools 地址（留空则用内置默认实例）
+          NEXT_PUBLIC_AKTOOLS_BASE_URL=${{ secrets.NEXT_PUBLIC_AKTOOLS_BASE_URL }}
           EOF
       - name: Install dependencies
         run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.command }}

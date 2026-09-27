@@ -1,5 +1,5 @@
 /**
- * TopK 天维度缓存单元测试
+ * AKTools 天维度缓存单元测试
  *
  * 覆盖：
  *   - 提取最新行 + 映射
@@ -8,7 +8,7 @@
  *   - 版本不匹配时忽略
  *   - localStorage 不可用时静默
  *
- * 运行：node --test app/providers/topk/__tests__/daily-cache.test.js
+ * 运行：node --test app/providers/aktools/__tests__/daily-cache.test.js
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
@@ -22,10 +22,10 @@ import {
   writeCachedStockHkValueHistory,
   getCachedStockValueWindow,
   writeCachedStockValueWindow,
-  cleanExpiredTopKCache,
-  getTopKCacheStats,
+  cleanExpiredAktoolsCache,
+  getAktoolsCacheStats,
   __test__ as dailyCacheInternals
-} from '../topk-daily-cache.js';
+} from '../aktools-daily-cache.js';
 
 // Mock localStorage
 const mockStorage = (() => {
@@ -101,16 +101,16 @@ describe('writeCache / getCachedStockFundamental', () => {
     writeCache('600519', data);
 
     // 手动篡改 ts 为25h 前
-    const raw = JSON.parse(mockStorage.getItem('topk:stockFundamentals:600519'));
+    const raw = JSON.parse(mockStorage.getItem('aktools:stockFundamentals:600519'));
     raw.ts = Date.now() - 25 * 60 * 60 * 1000;
-    mockStorage.setItem('topk:stockFundamentals:600519', JSON.stringify(raw));
+    mockStorage.setItem('aktools:stockFundamentals:600519', JSON.stringify(raw));
 
     assert.equal(getCachedStockFundamental('600519'), null);
   });
 
   it('版本不匹配时忽略', () => {
     mockStorage.setItem(
-      'topk:stockFundamentals:600519',
+      'aktools:stockFundamentals:600519',
       JSON.stringify({
         _v: 999,
         ts: Date.now(),
@@ -121,7 +121,7 @@ describe('writeCache / getCachedStockFundamental', () => {
   });
 
   it('损坏的 JSON 静默忽略', () => {
-    mockStorage.setItem('topk:stockFundamentals:600519', 'not-json{{{');
+    mockStorage.setItem('aktools:stockFundamentals:600519', 'not-json{{{');
     assert.equal(getCachedStockFundamental('600519'), null);
   });
 });
@@ -142,28 +142,28 @@ describe('cacheStockFundamentalFromRows', () => {
   });
 });
 
-describe('cleanExpiredTopKCache', () => {
+describe('cleanExpiredAktoolsCache', () => {
   it('清理过期条目，保留未过期条目', () => {
     writeCache('600519', { code: '600519', pe: 20 });
     writeCache('000001', { code: '000001', pe: 5 });
 
     // 篡改 600519 的 ts 使其过期
-    const raw = JSON.parse(mockStorage.getItem('topk:stockFundamentals:600519'));
+    const raw = JSON.parse(mockStorage.getItem('aktools:stockFundamentals:600519'));
     raw.ts = Date.now() - 25 * 60 * 60 * 1000;
-    mockStorage.setItem('topk:stockFundamentals:600519', JSON.stringify(raw));
+    mockStorage.setItem('aktools:stockFundamentals:600519', JSON.stringify(raw));
 
-    cleanExpiredTopKCache();
+    cleanExpiredAktoolsCache();
 
     assert.equal(getCachedStockFundamental('600519'), null);
     assert.notEqual(getCachedStockFundamental('000001'), null);
   });
 });
 
-describe('getTopKCacheStats', () => {
+describe('getAktoolsCacheStats', () => {
   it('返回缓存条数和字节数', () => {
     writeCache('600519', { code: '600519', pe: 20 });
     writeCache('000001', { code: '000001', pe: 5 });
-    const stats = getTopKCacheStats();
+    const stats = getAktoolsCacheStats();
     assert.equal(stats.count, 2);
     assert.ok(stats.totalBytes > 0);
   });
@@ -183,9 +183,9 @@ describe('港股估值序列天级缓存', () => {
     assert.equal(getCachedStockHkValueHistory('09988', 'pe'), null);
   });
 
-  it('缓存键为 topk:hkValueHistory:{symbol}:{indicator}', () => {
+  it('缓存键为 aktools:hkValueHistory:{symbol}:{indicator}', () => {
     writeCachedStockHkValueHistory('00700', 'pe', series);
-    assert.notEqual(mockStorage.getItem('topk:hkValueHistory:00700:pe'), null);
+    assert.notEqual(mockStorage.getItem('aktools:hkValueHistory:00700:pe'), null);
   });
 
   it('空数组不写入', () => {
@@ -195,43 +195,43 @@ describe('港股估值序列天级缓存', () => {
 
   it('24h 后过期', () => {
     writeCachedStockHkValueHistory('00700', 'pe', series);
-    const raw = JSON.parse(mockStorage.getItem('topk:hkValueHistory:00700:pe'));
+    const raw = JSON.parse(mockStorage.getItem('aktools:hkValueHistory:00700:pe'));
     raw.ts = Date.now() - 25 * 60 * 60 * 1000;
-    mockStorage.setItem('topk:hkValueHistory:00700:pe', JSON.stringify(raw));
+    mockStorage.setItem('aktools:hkValueHistory:00700:pe', JSON.stringify(raw));
     assert.equal(getCachedStockHkValueHistory('00700', 'pe'), null);
   });
 
   it('版本不匹配时忽略', () => {
-    mockStorage.setItem('topk:hkValueHistory:00700:pe', JSON.stringify({ _v: 999, ts: Date.now(), data: series }));
+    mockStorage.setItem('aktools:hkValueHistory:00700:pe', JSON.stringify({ _v: 999, ts: Date.now(), data: series }));
     assert.equal(getCachedStockHkValueHistory('00700', 'pe'), null);
   });
 
   it('损坏的 JSON 静默忽略', () => {
-    mockStorage.setItem('topk:hkValueHistory:00700:pe', 'not-json{{{');
+    mockStorage.setItem('aktools:hkValueHistory:00700:pe', 'not-json{{{');
     assert.equal(getCachedStockHkValueHistory('00700', 'pe'), null);
   });
 });
 
 describe('缓存管理工具覆盖港股序列族', () => {
-  it('cleanExpiredTopKCache 同时清理两族缓存', () => {
+  it('cleanExpiredAktoolsCache 同时清理两族缓存', () => {
     writeCache('600519', { code: '600519', pe: 20 });
     writeCachedStockHkValueHistory('00700', 'pe', [{ date: '2022-07-13', value: 13.76 }]);
 
     // 仅让港股条目过期
-    const raw = JSON.parse(mockStorage.getItem('topk:hkValueHistory:00700:pe'));
+    const raw = JSON.parse(mockStorage.getItem('aktools:hkValueHistory:00700:pe'));
     raw.ts = Date.now() - 25 * 60 * 60 * 1000;
-    mockStorage.setItem('topk:hkValueHistory:00700:pe', JSON.stringify(raw));
+    mockStorage.setItem('aktools:hkValueHistory:00700:pe', JSON.stringify(raw));
 
-    cleanExpiredTopKCache();
+    cleanExpiredAktoolsCache();
 
     assert.equal(getCachedStockHkValueHistory('00700', 'pe'), null);
     assert.notEqual(getCachedStockFundamental('600519'), null);
   });
 
-  it('getTopKCacheStats 同时统计两族缓存', () => {
+  it('getAktoolsCacheStats 同时统计两族缓存', () => {
     writeCache('600519', { code: '600519', pe: 20 });
     writeCachedStockHkValueHistory('00700', 'pe', [{ date: '2022-07-13', value: 13.76 }]);
-    const stats = getTopKCacheStats();
+    const stats = getAktoolsCacheStats();
     assert.equal(stats.count, 2);
     assert.ok(stats.totalBytes > 0);
   });
@@ -249,9 +249,9 @@ describe('A 股分位窗口天级缓存', () => {
     assert.equal(getCachedStockValueWindow('000001'), null);
   });
 
-  it('缓存键为 topk:stockValueWindow:{symbol}', () => {
+  it('缓存键为 aktools:stockValueWindow:{symbol}', () => {
     writeCachedStockValueWindow('600519', win);
-    assert.notEqual(mockStorage.getItem('topk:stockValueWindow:600519'), null);
+    assert.notEqual(mockStorage.getItem('aktools:stockValueWindow:600519'), null);
   });
 
   it('缺少 values 时不写入', () => {
@@ -261,25 +261,25 @@ describe('A 股分位窗口天级缓存', () => {
 
   it('24h 后过期', () => {
     writeCachedStockValueWindow('600519', win);
-    const raw = JSON.parse(mockStorage.getItem('topk:stockValueWindow:600519'));
+    const raw = JSON.parse(mockStorage.getItem('aktools:stockValueWindow:600519'));
     raw.ts = Date.now() - 25 * 60 * 60 * 1000;
-    mockStorage.setItem('topk:stockValueWindow:600519', JSON.stringify(raw));
+    mockStorage.setItem('aktools:stockValueWindow:600519', JSON.stringify(raw));
     assert.equal(getCachedStockValueWindow('600519'), null);
   });
 
   it('损坏的 JSON 静默忽略', () => {
-    mockStorage.setItem('topk:stockValueWindow:600519', 'not-json{{{');
+    mockStorage.setItem('aktools:stockValueWindow:600519', 'not-json{{{');
     assert.equal(getCachedStockValueWindow('600519'), null);
   });
 
   it('清理与统计工具覆盖窗口族', () => {
     writeCachedStockValueWindow('600519', win);
-    assert.equal(getTopKCacheStats().count, 1);
+    assert.equal(getAktoolsCacheStats().count, 1);
 
-    const raw = JSON.parse(mockStorage.getItem('topk:stockValueWindow:600519'));
+    const raw = JSON.parse(mockStorage.getItem('aktools:stockValueWindow:600519'));
     raw.ts = Date.now() - 25 * 60 * 60 * 1000;
-    mockStorage.setItem('topk:stockValueWindow:600519', JSON.stringify(raw));
-    cleanExpiredTopKCache();
+    mockStorage.setItem('aktools:stockValueWindow:600519', JSON.stringify(raw));
+    cleanExpiredAktoolsCache();
     assert.equal(getCachedStockValueWindow('600519'), null);
   });
 });

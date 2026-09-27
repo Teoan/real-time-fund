@@ -9,6 +9,9 @@ services:
         NEXT_PUBLIC_GA_ID: ${NEXT_PUBLIC_GA_ID}
         NEXT_PUBLIC_GITHUB_LATEST_RELEASE_URL: ${NEXT_PUBLIC_GITHUB_LATEST_RELEASE_URL}
         NEXT_PUBLIC_IS_GITHUB_LOGIN: ${NEXT_PUBLIC_IS_GITHUB_LOGIN}
+        # AKTools 地址：构建期只写入占位符，运行期由 entrypoint 替换为下面的环境变量，
+        # 因此改地址无需重新构建镜像
+        NEXT_PUBLIC_AKTOOLS_BASE_URL: ${NEXT_PUBLIC_AKTOOLS_BASE_URL}
 
     ports:
       - "3000:3000"
@@ -18,3 +21,5 @@ services:
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_IS_GITHUB_LOGIN: ${NEXT_PUBLIC_IS_GITHUB_LOGIN}
+      # 未设置时 entrypoint 会替换为空串，前端回落为内置默认地址
+      NEXT_PUBLIC_AKTOOLS_BASE_URL: ${NEXT_PUBLIC_AKTOOLS_BASE_URL}

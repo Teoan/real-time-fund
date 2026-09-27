@@ -1,26 +1,26 @@
 /**
- * TopK 天维度本地缓存
+ * AKTools 天维度本地缓存
  *
  * 解决问题：
  *   stock_value_em 每次返回 ~1MB（2107 行历史），但我们只用最新 1 行（~500B）。
  *   持仓穿透每次打开弹框都会触发 N 只股票 ×1MB 的请求，容易被限流。
  *
  * 方案：
- *   1. 首次请求：从 TopK 拉全量 → 提取最新行 → 写入 localStorage
+ *   1. 首次请求：从 AKTools 拉全量 → 提取最新行 → 写入 localStorage
  *   2. 后续请求：先读 localStorage → 命中且未过期则直接返回（不请求网络）
  *   3. 过期策略：每天自然过期（按交易日期比较），或最长24h强制过期
  *
  * 存储结构：
- *   key: "topk:stockFundamentals:{symbol}"
+ *   key: "aktools:stockFundamentals:{symbol}"
  *   value: { data: StockFundamental, date: "2026-09-07", ts: 1725744000000 }
  *
  * 港股估值序列（stock_hk_valuation_baidu，单指标 ~17~45KB、数据到当日）同样使用本模块的天级缓存：
- *   key: "topk:hkValueHistory:{symbol}:{pe|pb}"
+ *   key: "aktools:hkValueHistory:{symbol}:{pe|pb}"
  *   value: { data: [{ date, value }], ts: 1725744000000 }
  *   ⚠️ 仅缓存参与计算的时间窗（近 5 年）。该序列同时服务「当前分位」与「近 1/3 月区间走势」。
  *
  * A 股分位窗口（stock_value_em 单次 ~708KB / 2117 行，但分位只需近 5 年窗口）：
- *   key: "topk:stockValueWindow:{symbol}"
+ *   key: "aktools:stockValueWindow:{symbol}"
  *   value: { data: { values: { pe: number[], pb: number[], ps: number[] }, latest: row,
  *                    recent: [{date,pe,pb,ps}] }, ts }
  *   ⚠️ values 只落数值数组；recent 是区间走势用的带日期序列，
@@ -32,11 +32,11 @@
  *   - 缓存体积极小：10 只基金 ×500B = 5KB（对比原来 10MB）
  */
 
-const CACHE_PREFIX = 'topk:stockFundamentals:';
-/** 港股估值序列缓存前缀（键：`topk:hkValueHistory:{symbol}:{indicator}`） */
-const HK_CACHE_PREFIX = 'topk:hkValueHistory:';
-/** A 股分位窗口缓存前缀（键：`topk:stockValueWindow:{symbol}`） */
-const VALUE_WINDOW_CACHE_PREFIX = 'topk:stockValueWindow:';
+const CACHE_PREFIX = 'aktools:stockFundamentals:';
+/** 港股估值序列缓存前缀（键：`aktools:hkValueHistory:{symbol}:{indicator}`） */
+const HK_CACHE_PREFIX = 'aktools:hkValueHistory:';
+/** A 股分位窗口缓存前缀（键：`aktools:stockValueWindow:{symbol}`） */
+const VALUE_WINDOW_CACHE_PREFIX = 'aktools:stockValueWindow:';
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 小时强制过期
 const CACHE_VERSION = 1;
 // v2：港股估值序列数据源由 eniu（止于 2022-07-13）改为 baidu（数据到当日）。
@@ -216,7 +216,7 @@ export const writeCachedStockValueWindow = (symbol, window) => {
  * 清理过期缓存（可选调用，避免 localStorage 积累过多垃圾）。
  * 覆盖本模块全部缓存族：单股估值最新行 + 港股估值序列。
  */
-export const cleanExpiredTopKCache = () => {
+export const cleanExpiredAktoolsCache = () => {
   if (typeof localStorage === 'undefined') return;
   try {
     const keysToDelete = [];
@@ -252,7 +252,7 @@ export const cleanExpiredTopKCache = () => {
 export const getCachedStockFundamental = (symbol) => readCache(symbol);
 
 /**
- * 将 TopK 返回的 stock_value_em 全量数据提取最新行并写入天级缓存。
+ * 将 AKTools 返回的 stock_value_em 全量数据提取最新行并写入天级缓存。
  * @param {string} symbol - 6 位 A 股代码
  * @param {Array<object>} rows - stock_value_em 返回的完整历史数组
  * @param {object} ctx - { secid, market, code, name }
@@ -269,7 +269,7 @@ export const cacheStockFundamentalFromRows = (symbol, rows, ctx) => {
  * 查询缓存统计信息（用于调试/设置页展示）。
  * 覆盖本模块全部缓存族：单股估值最新行 + 港股估值序列。
  */
-export const getTopKCacheStats = () => {
+export const getAktoolsCacheStats = () => {
   if (typeof localStorage === 'undefined') return { count: 0, totalBytes: 0 };
   let count = 0;
   let totalBytes = 0;

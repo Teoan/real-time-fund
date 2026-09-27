@@ -104,7 +104,7 @@ export function epsGrowthToScore(growthPct) {
  * 营收增速评分（原始值阈值映射）
  * 营收增速越高 = 成长性越强 = 相对越"便宜"（分越低）；数值单位为 %
  *
- * 用于美股规则：美股无可用估值历史，成长性指标（TopK 美股财务指标）承担主要区分度。
+ * 用于美股规则：美股无可用估值历史，成长性指标（AKTools 美股财务指标）承担主要区分度。
  *
  * @param {number} growthPct - 营业收入同比（%）
  * @returns {number|null} 0-100 分

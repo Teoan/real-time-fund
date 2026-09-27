@@ -1,12 +1,12 @@
 /**
- * TopK Provider 能力矩阵
+ * AKTools Provider 能力矩阵
  *
  * 标记当前实现的 Provider 支持哪些业务能力。
- * 「AKShare 有接口」≠「TopK 部署的 AKTools 服务实际可用」≠「返回结构符合项目预期」。
+ * 「AKShare 有接口」≠「AKTools 服务实际可用」≠「返回结构符合项目预期」。
  * 因此所有能力在编写时必须按真实联调结果调整；
  * 已联调开启：getStockFundamentals、getFundDetail；其余待联调，保持关闭。
  *
- * @typedef {object} TopKProviderCapabilities
+ * @typedef {object} AktoolsProviderCapabilities
  * @property {boolean} searchFund          - 基金搜索
  * @property {boolean} getFundDetail       - 基金详情
  * @property {boolean} getFundLatestNav    - 最新净值
@@ -56,7 +56,7 @@ const DEFAULT_CAPABILITIES = {
   getStockUsFinancial: true
 };
 
-export const TOPK_CAPABILITIES = Object.freeze({ ...DEFAULT_CAPABILITIES });
+export const AKTOOLS_CAPABILITIES = Object.freeze({ ...DEFAULT_CAPABILITIES });
 
 /**
  * 合并用户/测试覆盖的能力集合，生成新对象（不修改默认）。

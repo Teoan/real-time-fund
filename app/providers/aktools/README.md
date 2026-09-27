@@ -1,20 +1,20 @@
-# TopK / AKTools Provider
+# AKTools Provider
 
-> 通过 [TopK](https://topk.xyz/) 部署的 AKTools 服务访问 [AKShare](https://akshare.akfamily.xyz/) 基金数据。
+> 通过 [AKTools](https://github.com/akfamily/aktools)（AKShare 官方 HTTP API 封装，[官方文档](https://aktools.akfamily.xyz/)）访问 [AKShare](https://akshare.akfamily.xyz/) 财经数据。
 
-本目录实现了一个完整的、可独立测试、可注入缓存的 Provider 抽象，**不直接接入 UI / 业务数据源选择器**。当真实 TopK 服务可访问后，将 `topk-capabilities.js` 中的能力标记从 `false` 改为 `true` 即可启用。
+本目录实现了一个完整的、可独立测试、可注入缓存的 Provider 抽象，**不直接接入 UI / 业务数据源选择器**。当真实 AKTools 服务可访问后，将 `aktools-capabilities.js` 中的能力标记从 `false` 改为 `true` 即可启用。
 
 ## 目录结构
 
 ```
-app/providers/topk/
+app/providers/aktools/
 ├── index.js                 公共入口（业务层只引用这里）
-├── topk-capabilities.js     能力矩阵
-├── topk-config.js           baseUrl / 端点 / TTL 集中管理
-├── topk-errors.js           错误模型
-├── topk-client.js           HTTP Client（sanitize + 超时 + 重试）
-├── topk-mappers.js          AKShare 字段 → Domain Model
-├── topk-provider.js         Provider 主类（含 TanStack Query 缓存）
+├── aktools-capabilities.js     能力矩阵
+├── aktools-config.js           baseUrl / 端点 / TTL 集中管理
+├── aktools-errors.js           错误模型
+├── aktools-client.js           HTTP Client（sanitize + 超时 + 重试）
+├── aktools-mappers.js          AKShare 字段 → Domain Model
+├── aktools-provider.js         Provider 主类（含 TanStack Query 缓存）
 └── __tests__/
     ├── client.test.js
     ├── mappers.test.js
@@ -23,7 +23,7 @@ app/providers/topk/
 
 ## 当前状态
 
-| 业务能力                  | 实现        | 真实 TopK 联调                      |
+| 业务能力                  | 实现        | 真实 AKTools 联调                   |
 | ------------------------- | ----------- | ----------------------------------- |
 | searchFund                | ✅          | ❌ 待联调                           |
 | getFundDetail             | ✅          | ✅ 2026-09-13                       |
@@ -43,7 +43,7 @@ app/providers/topk/
   东财 F10 主要财务指标不覆盖港股，故这是港股 ROE 的唯一来源。
 - **getStockHkValueHistory**：AKShare `stock_hk_valuation_baidu`（百度股市通），取市盈率(TTM) / 市净率历史序列，
   用于港股 PE/PB 历史分位**与近 1/3 月区间走势**。
-  业务层只传领域字段名 `pe` / `pb`，上游中文指标名在 `topk-config.js` 的 `TOPK_HK_VALUATION_INDICATORS` 中映射；
+  业务层只传领域字段名 `pe` / `pb`，上游中文指标名在 `aktools-config.js` 的 `AKTOOLS_HK_VALUATION_INDICATORS` 中映射；
   代码补零为 5 位（`0700` → `00700`，**不加** `hk` 前缀），并固定带 `period=近五年`。
 - **实测（2026-09-26）**：financial 200 / ~0.7KB / ~0.15s；valuation_baidu 200 / ~17~45KB，数据到当日。
 
@@ -60,7 +60,7 @@ AKShare 只能返回存档数据 —— 实测 00700 / 09988 / 00939 / 03690 的
 
 ### 缓存
 
-序列经 `topk-daily-cache.js` 做**天级 localStorage 缓存**（键 `topk:hkValueHistory:{symbol}:{pe|pb}`），
+序列经 `aktools-daily-cache.js` 做**天级 localStorage 缓存**（键 `aktools:hkValueHistory:{symbol}:{pe|pb}`），
 只写入近 5 年窗口（约 914 行/指标）。切换到 baidu 后 `HK_CACHE_VERSION` 已从 1 提升到 2，
 使旧的 eniu 陈旧缓存自动失效（否则会继续用 4 年前的区间算分位）。
 
@@ -115,7 +115,7 @@ AKShare 只能返回存档数据 —— 实测 00700 / 09988 / 00939 / 03690 的
 - 数据量小、耗时短，因此只走 TanStack 24h 缓存，**不做** localStorage 天级缓存
   （与港股估值序列需按天缓存的情况不同）。
 
-### 美股估值倍数走东财 push2（非 TopK）
+### 美股估值倍数走东财 push2（非 AKTools）
 
 美股当前 PE/PB/PS/股息率由东财 `push2delay` 提供，业务层在 `normalizeSecid` 中解析 secid：
 
@@ -159,38 +159,71 @@ AKShare 只能返回存档数据 —— 实测 00700 / 09988 / 00939 / 03690 的
 
 现在改为三层：
 
-1. **Provider 共用一份原始行**：两个方法都走同一个缓存条目（key `topk:stockValueEm:{symbol}`），各自只做映射。
+1. **Provider 共用一份原始行**：两个方法都走同一个缓存条目（key `aktools:stockValueEm:{symbol}`），各自只做映射。
    该条目内存 TTL 仅 10 分钟（`STOCK_VALUE_ROWS_CACHE_TTL`）—— ~708KB/只长期驻留不划算，
    而两个消费者在同一次估值流程内先后调用，10 分钟绰绰有余。
-2. **业务层天级缓存「分位窗口」**：`topk:stockValueWindow:{symbol}` 只存近 5 年窗口的各指标数值数组 + 窗口最后一行
+2. **业务层天级缓存「分位窗口」**：`aktools:stockValueWindow:{symbol}` 只存近 5 年窗口的各指标数值数组 + 窗口最后一行
    （`buildStockValueWindow`），刷新时不再重放全量；A 股预取同时改用 `asyncPool(4)` 并发。
-3. **Provider 默认缓存不再是 no-op**：`createTopKProvider` 现在默认按实例注入内存缓存
-   （in-flight 去重 + TTL 取 `staleTime` + 32 条上限）。此前 `defaultTopKProvider` 完全没有缓存、
-   而 `createTopKProviderForApp` 从未被调用，等于所有 TopK 请求都不缓存。
+3. **Provider 默认缓存不再是 no-op**：`createAktoolsProvider` 现在默认按实例注入内存缓存
+   （in-flight 去重 + TTL 取 `staleTime` + 32 条上限）。此前 `defaultAktoolsProvider` 完全没有缓存、
+   而 `createAktoolsProviderForApp` 从未被调用，等于所有 AKTools 请求都不缓存。
 
 效果（10 只 A 股持仓）：当天首次打开 **20 次 → 10 次**（≈14MB → ≈7MB），之后每次刷新 **10 次 → 0 次**。
 
 ## 单股 ROE 兜底（getStockRoe）
 
 - **数据源**：AKShare `stock_financial_analysis_indicator`（新浪财经-财务指标），取最近一期报告的「加权净资产收益率(%)」。
-- **定位**：业务层 `app/api/fund.js` 中 ROE 以「东方财富 F10（JSONP 直连）主源 → TopK 兜底」的顺序获取，仅当 F10 不可用时才调用本方法。
+- **定位**：业务层 `app/api/fund.js` 中 ROE 以「东方财富 F10（JSONP 直连）主源 → AKTools 兜底」的顺序获取，仅当 F10 不可用时才调用本方法。
 - **实测（2026-09-19）**：HTTP 200 / 约 30KB（`start_year` 限制近两年报告期）/ 约 2.4s。
   东财口径的 `stock_financial_analysis_indicator_em` 在同一实例返回 500，未采用；`stock_financial_abstract`、`stock_zh_dupont_comparison_em` 亦可用但字段口径不如前者直接。
 
-⚠️ **topk.xyz 域名当前并非 AKTools 服务**（验证日期 2026-08-31，主页为无关 LNMP 演示页，`/api/public/*` 全部 404）。在用户/部署方提供正确的 AKTools baseUrl 之前，所有方法调用都会通过单元测试中模拟的 fetch 通过。
+⚠️ 单元测试通过 mock fetch 校验映射逻辑，不依赖真实服务；
+真实可用性以各接口的联调记录为准。
 
 ## 配置环境变量
 
 ```
-NEXT_PUBLIC_TOPK_BASE_URL=https://your-aktools-host/api/public
+NEXT_PUBLIC_AKTOOLS_BASE_URL=https://your-aktools-host/api/public
 ```
 
-未设置时使用 `http://100.68.218.28:18081/api/public`（自建 AKTools 实例默认值）。
+未设置（或为空串）时使用 `http://100.68.218.28:18081/api/public`（自建 AKTools 实例默认值）。
+结尾斜杠会被自动去掉。
+
+各部署形态的取值方式：
+
+| 部署方式                  | 设置位置                                                    | 生效时机                               |
+| ------------------------- | ----------------------------------------------------------- | -------------------------------------- |
+| 本地开发                  | `.env.local`                                                | 启动 dev server 时                     |
+| Docker                    | `docker-compose.yml` 的 `environment`（或 `docker run -e`） | **容器启动时**，改地址无需重新构建镜像 |
+| GitHub Pages              | 仓库 secret `NEXT_PUBLIC_AKTOOLS_BASE_URL`                  | 构建时                                 |
+| Vercel / Cloudflare Pages | 平台环境变量                                                | 构建时                                 |
+
+### ⚠️ 读取方式必须用「静态成员访问」
+
+`aktools-config.js` 里必须写成 `process.env.NEXT_PUBLIC_AKTOOLS_BASE_URL`：
+
+```js
+// ✅ Next/webpack 会在构建时把它内联成字符串常量
+const ENV_AKTOOLS_BASE_URL = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_AKTOOLS_BASE_URL : '';
+
+// ❌ 可选链 / 动态取值不会被内联，运行时查不到值，只能永远回落默认地址
+const bad = process?.env?.NEXT_PUBLIC_AKTOOLS_BASE_URL;
+const alsoBad = process.env['NEXT_PUBLIC_AKTOOLS_BASE_URL'];
+```
+
+（历史上这里曾用可选链写法，导致该变量在构建产物里始终取不到值、配置了也不生效。）
+
+Docker 构建阶段该变量是占位符 `__NEXT_PUBLIC_AKTOOLS_BASE_URL__`（由 Dockerfile 的 `ARG`/`ENV` 提供），
+Next 把它内联进产物；运行阶段 `entrypoint.sh` 再用真实环境变量替换，
+**因此改地址不需要重新构建镜像**（`docker compose up -d` 重建容器即可）。
+
+未传该变量时替换结果为空串，前端会回落默认地址 —— 这是刻意的：
+若让 baseUrl 变成空串，所有请求会退化成相对路径（打到 nginx 自己的 404）。
 
 ## 运行测试
 
 ```
-node --test app/providers/topk/__tests__/*.test.js
+node --test app/providers/aktools/__tests__/*.test.js
 ```
 
 注：Node 25 下 `node --test <目录>` 会把目录当作模块解析并报 `MODULE_NOT_FOUND`，
@@ -198,16 +231,16 @@ node --test app/providers/topk/__tests__/*.test.js
 
 ## 设计原则
 
-1. **Provider 不在业务层写 URL**：业务层只 `import { defaultTopKProvider } from '@/app/providers/topk'`，baseUrl 完全在 `topk-config.js` 中。
-2. **AKShare 字段不得泄漏**：所有 AKShare 中文列名（如 `单位净值`）必须经过 `topk-mappers.js` 转换，业务层只看到 `unitNav`。
-3. **错误归一化**：UI 层不会直接收到 `fetch` 或 `JSON.parse` 异常，只会收到 `TopKError` 家族。
+1. **Provider 不在业务层写 URL**：业务层只 `import { defaultAktoolsProvider } from '@/app/providers/aktools'`，baseUrl 完全在 `aktools-config.js` 中。
+2. **AKShare 字段不得泄漏**：所有 AKShare 中文列名（如 `单位净值`）必须经过 `aktools-mappers.js` 转换，业务层只看到 `unitNav`。
+3. **错误归一化**：UI 层不会直接收到 `fetch` 或 `JSON.parse` 异常，只会收到 `AktoolsError` 家族。
 4. **不绑定 UI**：本目录故意**不修改** `app/api/fund.js`、`FundDataSourceSelector.jsx`、`page.jsx`。是否接入数据源切换 UI 由后续 PR 决定。
 
 ## 接入 UI 的最小后续步骤
 
 ```js
 // 1) 在 fetchFundValuationBySource 中加入 source=5 路由（暂不推荐，先做 fallback）
-// 2) 在 settingsStore 中加入 TopK 启用开关与 baseUrl 配置项
+// 2) 在 settingsStore 中加入 AKTools 启用开关与 baseUrl 配置项
 // 3) 在 FundDataSourceSelector.jsx 中展示健康状态（healthCheck 结果）
-// 4) 用 topk-capabilities 中真实联调结果更新能力矩阵
+// 4) 用 aktools-capabilities 中真实联调结果更新能力矩阵
 ```

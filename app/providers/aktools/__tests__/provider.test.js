@@ -1,22 +1,22 @@
 /**
- * TopK Provider 单元测试
+ * AKTools Provider 单元测试
  *
  * 覆盖：
  *   - searchFund 正常 / 空 / 过滤无效
  *   - getFundDetail 字段完整 / 部分 null / 未找到
  *   - getFundNavHistory 排序 / 去重 / 区间过滤
  *   - getFundHoldings 正常 / 无披露
- *   - 不支持的能力抛 TopKUnsupportedError
+ *   - 不支持的能力抛 AktoolsUnsupportedError
  *
- * 运行：node --test app/providers/topk/__tests__/provider.test.js
+ * 运行：node --test app/providers/aktools/__tests__/provider.test.js
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createTopKProvider } from '../topk-provider.js';
-import { createTopKClient } from '../topk-client.js';
-import { FundNotFoundError, TopKUnsupportedError } from '../topk-errors.js';
+import { createAktoolsProvider } from '../aktools-provider.js';
+import { createAktoolsClient } from '../aktools-client.js';
+import { FundNotFoundError, AktoolsUnsupportedError } from '../aktools-errors.js';
 
 const okJson = (body) => ({
   ok: true,
@@ -34,7 +34,7 @@ const withMockFetch = async (handler, fn) => {
   }
 };
 
-describe('TopK Provider - searchFund', () => {
+describe('AKTools Provider - searchFund', () => {
   it('正常响应 → 映射后返回', async () => {
     await withMockFetch(
       async () =>
@@ -46,8 +46,8 @@ describe('TopK Provider - searchFund', () => {
           ]
         }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { searchFund: true }
         });
         const out = await provider.searchFund('110022');
@@ -63,8 +63,8 @@ describe('TopK Provider - searchFund', () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { searchFund: true }
         });
         const out = await provider.searchFund('nothing');
@@ -73,15 +73,15 @@ describe('TopK Provider - searchFund', () => {
     );
   });
 
-  it('能力未启用 → TopKUnsupportedError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://x', retries: 0 })
+  it('能力未启用 → AktoolsUnsupportedError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://x', retries: 0 })
     });
-    await assert.rejects(provider.searchFund('any'), TopKUnsupportedError);
+    await assert.rejects(provider.searchFund('any'), AktoolsUnsupportedError);
   });
 });
 
-describe('TopK Provider - getFundDetail', () => {
+describe('AKTools Provider - getFundDetail', () => {
   it('完整字段', async () => {
     await withMockFetch(
       async () =>
@@ -97,8 +97,8 @@ describe('TopK Provider - getFundDetail', () => {
           ]
         }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getFundDetail: true }
         });
         const out = await provider.getFundDetail('000001');
@@ -118,8 +118,8 @@ describe('TopK Provider - getFundDetail', () => {
           data: [{ item: '基金名称', value: '某基金' }]
         }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getFundDetail: true }
         });
         const out = await provider.getFundDetail('999999');
@@ -133,8 +133,8 @@ describe('TopK Provider - getFundDetail', () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getFundDetail: true }
         });
         await assert.rejects(provider.getFundDetail('xxxx'), FundNotFoundError);
@@ -143,7 +143,7 @@ describe('TopK Provider - getFundDetail', () => {
   });
 });
 
-describe('TopK Provider - getFundNavHistory', () => {
+describe('AKTools Provider - getFundNavHistory', () => {
   it('按日期升序 + 去重', async () => {
     await withMockFetch(
       async () =>
@@ -156,8 +156,8 @@ describe('TopK Provider - getFundNavHistory', () => {
           ]
         }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getFundNavHistory: true }
         });
         const out = await provider.getFundNavHistory('000001');
@@ -181,8 +181,8 @@ describe('TopK Provider - getFundNavHistory', () => {
           ]
         }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getFundNavHistory: true }
         });
         const out = await provider.getFundNavHistory('000001', '2024-06-01', '2024-06-02');
@@ -195,8 +195,8 @@ describe('TopK Provider - getFundNavHistory', () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getFundNavHistory: true }
         });
         await assert.rejects(provider.getFundNavHistory('000001'), FundNotFoundError);
@@ -205,7 +205,7 @@ describe('TopK Provider - getFundNavHistory', () => {
   });
 });
 
-describe('TopK Provider - getFundHoldings', () => {
+describe('AKTools Provider - getFundHoldings', () => {
   it('正常持仓', async () => {
     await withMockFetch(
       async () =>
@@ -224,8 +224,8 @@ describe('TopK Provider - getFundHoldings', () => {
           ]
         }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getFundHoldings: true }
         });
         const out = await provider.getFundHoldings('000001', '2024');
@@ -233,7 +233,7 @@ describe('TopK Provider - getFundHoldings', () => {
         assert.equal(out.holdings[0].stockCode, '600519');
         assert.equal(out.reportDate, '2024-03-31');
         assert.equal(out.dataDate, '2024-03-31');
-        assert.equal(out.source, 'topk');
+        assert.equal(out.source, 'aktools');
       }
     );
   });
@@ -242,8 +242,8 @@ describe('TopK Provider - getFundHoldings', () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getFundHoldings: true }
         });
         const out = await provider.getFundHoldings('000001');
@@ -254,7 +254,7 @@ describe('TopK Provider - getFundHoldings', () => {
   });
 });
 
-describe('TopK Provider - getStockFundamentals', () => {
+describe('AKTools Provider - getStockFundamentals', () => {
   it('正常行 → 映射到标准 StockFundamental 结构', async () => {
     await withMockFetch(
       async () =>
@@ -274,8 +274,8 @@ describe('TopK Provider - getStockFundamentals', () => {
           ]
         }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockFundamentals: true }
         });
         const out = await provider.getStockFundamentals('600519', {
@@ -295,28 +295,28 @@ describe('TopK Provider - getStockFundamentals', () => {
     );
   });
 
-  it('非 6 位代码 → TopKError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('非 6 位代码 → AktoolsError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockFundamentals: true }
     });
     await assert.rejects(provider.getStockFundamentals('12345'), /6 位代码/);
   });
 
-  it('能力显式禁用 → TopKUnsupportedError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('能力显式禁用 → AktoolsUnsupportedError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockFundamentals: false }
     });
-    await assert.rejects(provider.getStockFundamentals('600519'), TopKUnsupportedError);
+    await assert.rejects(provider.getStockFundamentals('600519'), AktoolsUnsupportedError);
   });
 
   it('空数据 → FundNotFoundError', async () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockFundamentals: true }
         });
         await assert.rejects(provider.getStockFundamentals('600519'), FundNotFoundError);
@@ -325,7 +325,7 @@ describe('TopK Provider - getStockFundamentals', () => {
   });
 });
 
-describe('TopK Provider - getStockValueHistory', () => {
+describe('AKTools Provider - getStockValueHistory', () => {
   const historyRows = [
     {
       数据日期: '2024-06-04T00:00:00.000',
@@ -349,8 +349,8 @@ describe('TopK Provider - getStockValueHistory', () => {
     await withMockFetch(
       async () => okJson({ success: true, data: historyRows }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockFundamentals: true }
         });
         const out = await provider.getStockValueHistory('600519');
@@ -373,8 +373,8 @@ describe('TopK Provider - getStockValueHistory', () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [{ 数据日期: 'bad', 'PE(TTM)': 99 }] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockFundamentals: true }
         });
         await assert.rejects(provider.getStockValueHistory('600519'), FundNotFoundError);
@@ -382,28 +382,28 @@ describe('TopK Provider - getStockValueHistory', () => {
     );
   });
 
-  it('非 6 位代码 → TopKError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('非 6 位代码 → AktoolsError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockFundamentals: true }
     });
     await assert.rejects(provider.getStockValueHistory('12345'), /6 位代码/);
   });
 
-  it('能力显式禁用 → TopKUnsupportedError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('能力显式禁用 → AktoolsUnsupportedError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockFundamentals: false }
     });
-    await assert.rejects(provider.getStockValueHistory('600519'), TopKUnsupportedError);
+    await assert.rejects(provider.getStockValueHistory('600519'), AktoolsUnsupportedError);
   });
 
   it('空数据 → FundNotFoundError', async () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockFundamentals: true }
         });
         await assert.rejects(provider.getStockValueHistory('600519'), FundNotFoundError);
@@ -412,7 +412,7 @@ describe('TopK Provider - getStockValueHistory', () => {
   });
 });
 
-describe('TopK Provider - getStockRoe', () => {
+describe('AKTools Provider - getStockRoe', () => {
   const roeRows = [
     { 日期: '2025-06-30T00:00:00.000', '净资产收益率(%)': 15.1, '加权净资产收益率(%)': 14.2 },
     { 日期: '2026-06-30T00:00:00.000', '净资产收益率(%)': 17.72, '加权净资产收益率(%)': 16.75 }
@@ -422,8 +422,8 @@ describe('TopK Provider - getStockRoe', () => {
     await withMockFetch(
       async () => okJson({ success: true, data: roeRows }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockRoe: true }
         });
         const out = await provider.getStockRoe('600519');
@@ -440,8 +440,8 @@ describe('TopK Provider - getStockRoe', () => {
         return okJson({ success: true, data: roeRows });
       },
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockRoe: true }
         });
         await provider.getStockRoe('600519');
@@ -452,28 +452,28 @@ describe('TopK Provider - getStockRoe', () => {
     assert.match(capturedUrl, /start_year=\d{4}/);
   });
 
-  it('非 6 位代码 → TopKError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('非 6 位代码 → AktoolsError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockRoe: true }
     });
     await assert.rejects(provider.getStockRoe('12345'), /6 位代码/);
   });
 
-  it('能力显式禁用 → TopKUnsupportedError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('能力显式禁用 → AktoolsUnsupportedError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockRoe: false }
     });
-    await assert.rejects(provider.getStockRoe('600519'), TopKUnsupportedError);
+    await assert.rejects(provider.getStockRoe('600519'), AktoolsUnsupportedError);
   });
 
   it('无 ROE 字段 → FundNotFoundError', async () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [{ 日期: '2026-06-30T00:00:00.000' }] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockRoe: true }
         });
         await assert.rejects(provider.getStockRoe('600519'), FundNotFoundError);
@@ -485,8 +485,8 @@ describe('TopK Provider - getStockRoe', () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockRoe: true }
         });
         await assert.rejects(provider.getStockRoe('600519'), FundNotFoundError);
@@ -495,7 +495,7 @@ describe('TopK Provider - getStockRoe', () => {
   });
 });
 
-describe('TopK Provider - stock_value_em 共用缓存', () => {
+describe('AKTools Provider - stock_value_em 共用缓存', () => {
   const rows = [
     {
       数据日期: '2024-06-01T00:00:00.000',
@@ -527,8 +527,8 @@ describe('TopK Provider - stock_value_em 共用缓存', () => {
         return okJson({ success: true, data: rows });
       },
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockFundamentals: true }
         });
         const f = await provider.getStockFundamentals('600519', { secid: '1.600519', code: '600519' });
@@ -549,8 +549,8 @@ describe('TopK Provider - stock_value_em 共用缓存', () => {
       },
       async () => {
         const makeProvider = () =>
-          createTopKProvider({
-            client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          createAktoolsProvider({
+            client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
             capabilities: { getStockFundamentals: true }
           });
         await makeProvider().getStockFundamentals('600519', {});
@@ -568,8 +568,8 @@ describe('TopK Provider - stock_value_em 共用缓存', () => {
         return okJson({ success: true, data: [] });
       },
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockFundamentals: true }
         });
         await assert.rejects(provider.getStockFundamentals('600519'), FundNotFoundError);
@@ -580,13 +580,13 @@ describe('TopK Provider - stock_value_em 共用缓存', () => {
   });
 });
 
-describe('TopK Provider - getStockHkRoe', () => {
+describe('AKTools Provider - getStockHkRoe', () => {
   it('正常响应 → 返回股东权益回报率', async () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [{ 市盈率: 14.28, '股东权益回报率(%)': 9.97 }] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockHkFinancial: true }
         });
         assert.equal(await provider.getStockHkRoe('00700'), 9.97);
@@ -594,28 +594,28 @@ describe('TopK Provider - getStockHkRoe', () => {
     );
   });
 
-  it('6 位 A 股代码 → TopKError（港股校验）', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('6 位 A 股代码 → AktoolsError（港股校验）', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockHkFinancial: true }
     });
     await assert.rejects(provider.getStockHkRoe('600519'), /港股 4~5 位代码/);
   });
 
-  it('能力显式禁用 → TopKUnsupportedError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('能力显式禁用 → AktoolsUnsupportedError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockHkFinancial: false }
     });
-    await assert.rejects(provider.getStockHkRoe('00700'), TopKUnsupportedError);
+    await assert.rejects(provider.getStockHkRoe('00700'), AktoolsUnsupportedError);
   });
 
   it('无 ROE 字段 → FundNotFoundError', async () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [{ 市盈率: 14 }] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockHkFinancial: true }
         });
         await assert.rejects(provider.getStockHkRoe('00700'), FundNotFoundError);
@@ -624,7 +624,7 @@ describe('TopK Provider - getStockHkRoe', () => {
   });
 });
 
-describe('TopK Provider - getStockHkValueHistory', () => {
+describe('AKTools Provider - getStockHkValueHistory', () => {
   // 百度股市通形态：单指标序列 [{ date, value }]
   const hkRows = [
     { date: '2026-09-26', value: 14.64 },
@@ -639,8 +639,8 @@ describe('TopK Provider - getStockHkValueHistory', () => {
         return okJson({ success: true, data: hkRows });
       },
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockHkValueHistory: true }
         });
         const out = await provider.getStockHkValueHistory('00700', 'pe');
@@ -668,8 +668,8 @@ describe('TopK Provider - getStockHkValueHistory', () => {
         return okJson({ success: true, data: [{ date: '2026-09-26', value: 3.04 }] });
       },
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockHkValueHistory: true }
         });
         const out = await provider.getStockHkValueHistory('0700', 'pb');
@@ -680,28 +680,28 @@ describe('TopK Provider - getStockHkValueHistory', () => {
     assert.equal(new URL(capturedUrl).searchParams.get('indicator'), '市净率');
   });
 
-  it('不支持的指标（ps）→ TopKUnsupportedError，且不发请求', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('不支持的指标（ps）→ AktoolsUnsupportedError，且不发请求', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockHkValueHistory: true }
     });
-    await assert.rejects(provider.getStockHkValueHistory('00700', 'ps'), TopKUnsupportedError);
+    await assert.rejects(provider.getStockHkValueHistory('00700', 'ps'), AktoolsUnsupportedError);
   });
 
-  it('能力显式禁用 → TopKUnsupportedError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('能力显式禁用 → AktoolsUnsupportedError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockHkValueHistory: false }
     });
-    await assert.rejects(provider.getStockHkValueHistory('00700', 'pe'), TopKUnsupportedError);
+    await assert.rejects(provider.getStockHkValueHistory('00700', 'pe'), AktoolsUnsupportedError);
   });
 
   it('空数据 → FundNotFoundError', async () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockHkValueHistory: true }
         });
         await assert.rejects(provider.getStockHkValueHistory('00700', 'pe'), FundNotFoundError);
@@ -710,7 +710,7 @@ describe('TopK Provider - getStockHkValueHistory', () => {
   });
 });
 
-describe('TopK Provider - getStockUsFinancial', () => {
+describe('AKTools Provider - getStockUsFinancial', () => {
   const usRows = [
     {
       REPORT_DATE: '2025-09-27 00:00:00',
@@ -730,8 +730,8 @@ describe('TopK Provider - getStockUsFinancial', () => {
         return okJson({ success: true, data: usRows });
       },
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockUsFinancial: true }
         });
         const out = await provider.getStockUsFinancial('AAPL');
@@ -757,8 +757,8 @@ describe('TopK Provider - getStockUsFinancial', () => {
         return okJson({ success: true, data: usRows });
       },
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockUsFinancial: true }
         });
         await provider.getStockUsFinancial('AAPL');
@@ -772,8 +772,8 @@ describe('TopK Provider - getStockUsFinancial', () => {
     await withMockFetch(
       async () => okJson({ success: true, data: usRows }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockUsFinancial: true }
         });
         const out = await provider.getStockUsFinancial('BRK.B');
@@ -782,29 +782,29 @@ describe('TopK Provider - getStockUsFinancial', () => {
     );
   });
 
-  it('非法标的（以数字开头/空）→ TopKError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('非法标的（以数字开头/空）→ AktoolsError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockUsFinancial: true }
     });
     await assert.rejects(provider.getStockUsFinancial('600519'), /仅接受美股代码/);
     await assert.rejects(provider.getStockUsFinancial(''), /仅接受美股代码/);
   });
 
-  it('能力显式禁用 → TopKUnsupportedError', async () => {
-    const provider = createTopKProvider({
-      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+  it('能力显式禁用 → AktoolsUnsupportedError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
       capabilities: { getStockUsFinancial: false }
     });
-    await assert.rejects(provider.getStockUsFinancial('AAPL'), TopKUnsupportedError);
+    await assert.rejects(provider.getStockUsFinancial('AAPL'), AktoolsUnsupportedError);
   });
 
   it('空数据 → FundNotFoundError', async () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockUsFinancial: true }
         });
         await assert.rejects(provider.getStockUsFinancial('AAPL'), FundNotFoundError);
@@ -816,8 +816,8 @@ describe('TopK Provider - getStockUsFinancial', () => {
     await withMockFetch(
       async () => okJson({ success: true, data: [{ REPORT_DATE: '2025-09-27 00:00:00' }] }),
       async () => {
-        const provider = createTopKProvider({
-          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
           capabilities: { getStockUsFinancial: true }
         });
         await assert.rejects(provider.getStockUsFinancial('AAPL'), FundNotFoundError);

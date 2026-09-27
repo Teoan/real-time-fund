@@ -9,7 +9,7 @@ import { getQueryClient } from '../lib/get-query-client';
 import * as qk from '../lib/query-keys';
 import { isSupabaseConfigured, supabase, canUseSupabaseBusiness, tripSupabaseCircuit } from '../lib/supabase';
 import { isTradingDay } from '../lib/tradingCalendar';
-import { TOPK_PROVIDER } from '@/app/providers/topk';
+import { AKTOOLS_PROVIDER } from '@/app/providers/aktools';
 import {
   getCachedStockFundamental,
   getCachedStockHkValueHistory,
@@ -17,7 +17,7 @@ import {
   writeCache as writeStockFundamentalCache,
   writeCachedStockHkValueHistory,
   writeCachedStockValueWindow
-} from '@/app/providers/topk/topk-daily-cache';
+} from '@/app/providers/aktools/aktools-daily-cache';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useValuationProgressStore } from '../stores/valuationProgressStore';
 import { classifyFund, refineClassificationByHoldings } from '@/app/lib/fundClassifier';
@@ -2129,7 +2129,7 @@ const secidMarket = (secid) => {
 
 // 字段映射（push2 实测有效字段，参考贵州茅台 / 美的 / 腾讯的实拉响应）
 // PE(TTM) = f164，PB = f167，PS(TTM) = f165，净利同比 = f185，股息率 = f126
-// 注：push2 stock/get 不提供 PEG，PEG 由 TopK stock_value_em 提供（纯 push2 路径下置 null）
+// 注：push2 stock/get 不提供 PEG，PEG 由 AKTools stock_value_em 提供（纯 push2 路径下置 null）
 const STOCK_FUNDAMENTALS_FIELDS = [
   'f43', // 最新价
   'f57', // 股票代码
@@ -2159,7 +2159,7 @@ const STOCK_FUNDAMENTALS_SUPPLEMENT_FIELDS = ['f57', 'f126', 'f185'].join(',');
 
 /**
  * push2 轻量补充请求：只拉股息率(f126)与净利润同比(f185)。
- * best-effort —— 任何失败都返回 null，不影响主流程（TopK 的 pe/pb/ps/peg 照常使用）。
+ * best-effort —— 任何失败都返回 null，不影响主流程（AKTools 的 pe/pb/ps/peg 照常使用）。
  *
  * @param {string} secid - 东财 secid（如 "1.600519"）
  * @returns {Promise<{dividendYield: number|null, epsGrowth: number|null}|null>}
@@ -2237,10 +2237,10 @@ const processStockFundamentalsQueue = async () => {
               pb: parseFundamentalField(d.f167),
               ps: parseFundamentalField(d.f165),
               dividendYield: parseFundamentalField(d.f126),
-              peg: null, // push2 stock/get 无 PEG 字段，由 TopK stock_value_em 提供
+              peg: null, // push2 stock/get 无 PEG 字段，由 AKTools stock_value_em 提供
               // f185 缺失哨兵值：A 股有效；港股恒为 0（实测腾讯/阿里/美团/汇丰等均为 0.0），
               // 美股同样恒为 0（实测 AAPL/TSLA/NVDA 等均为 0.0），故港美股一律置 null。
-              // 美股净利润同比改由 TopK stock_financial_us_analysis_indicator_em 提供。
+              // 美股净利润同比改由 AKTools stock_financial_us_analysis_indicator_em 提供。
               epsGrowth: market === 'HK' || market === 'US' ? null : parseFundamentalField(d.f185),
               updateTime: d.f86 != null ? String(d.f86) : null,
               fetchedAt: Date.now()
@@ -2274,11 +2274,11 @@ const processStockFundamentalsQueue = async () => {
  * 批量获取单只股票基本面（DataLoader 模式，secid 一只一只拉取，内部合并并发）
  *
  * 数据源路由：
- *   - 当 settings.topkStockFundamentalsEnabled=true 且 secid 解析为 A 股时，
- *     走 TopK (AKShare stock_value_em)。
- *   - 港股与美股的估值倍数走原东财 push2 路径（TopK 无对应可用接口：美股
+ *   - 当 settings.aktoolsStockFundamentalsEnabled=true 且 secid 解析为 A 股时，
+ *     走 AKTools (AKShare stock_value_em)。
+ *   - 港股与美股的估值倍数走原东财 push2 路径（AKTools 无对应可用接口：美股
  *     stock_us_spot_em / stock_us_hist / stock_us_valuation_baidu 实测均 500）。
- *     美股的 ROE / 盈利增速 / 营收增速另由 TopK stock_financial_us_analysis_indicator_em
+ *     美股的 ROE / 盈利增速 / 营收增速另由 AKTools stock_financial_us_analysis_indicator_em
  *     提供，见 fetchStockUsFinancial。
  *   - 否则保持原东财 push2 单股接口实现（向后兼容，默认行为）。
  *
@@ -2307,21 +2307,21 @@ const fetchStockFundamentalsBatched = (secid) => {
 };
 
 /**
- * 按单个 secid 拉取单股估值倍数（DataLoader 合并并发；A 股可走 TopK）。
+ * 按单个 secid 拉取单股估值倍数（DataLoader 合并并发；A 股可走 AKTools）。
  *
  * @param {string} s - 已校验非空的东财 secid
  * @returns {Promise<StockFundamental>}
  */
 const lookupStockFundamentals = (s) => {
-  // 从 secid 推导 6 位股票代码与市场，决定是否走 TopK
+  // 从 secid 推导 6 位股票代码与市场，决定是否走 AKTools
   // secid 形如 "1.600519" / "0.000001" / "116.00700" / "105.AAPL"
   const dotIdx = s.indexOf('.');
   const tail = dotIdx >= 0 ? s.slice(dotIdx + 1) : s;
   const isAStock = /^\d{6}$/.test(tail);
-  const topkEnabled = isAStock && useSettingsStore.getState().topkStockFundamentalsEnabled === true;
+  const aktoolsEnabled = isAStock && useSettingsStore.getState().aktoolsStockFundamentalsEnabled === true;
 
-  if (topkEnabled) {
-    return topkFetchStockFundamentals(s, tail);
+  if (aktoolsEnabled) {
+    return aktoolsFetchStockFundamentals(s, tail);
   }
 
   const qc = getQueryClient();
@@ -2343,22 +2343,22 @@ const lookupStockFundamentals = (s) => {
 };
 
 /**
- * 通过 TopK Provider 拉取 A 股单股估值，复用 push2 同名缓存键 (stockFundamentals)。
+ * 通过 AKTools Provider 拉取 A 股单股估值，复用 push2 同名缓存键 (stockFundamentals)。
  *
  * 缓存层（优先级从高到低）：
  *   1. TanStack Query 内存缓存（同一页面会话内有效）
  *   2. localStorage 天级缓存（跨页面刷新有效，24h 过期）
- *   3. TopK Provider 实时请求（stock_value_em，~1MB/只）
+ *   3. AKTools Provider 实时请求（stock_value_em，~1MB/只）
  *   4. push2 轻量补充（仅 f126/f185 两个字段）：stock_value_em 无股息率/净利同比列，
  *      用 push2 单股接口补齐后合并，best-effort，失败时两字段保持 null
  *
  * stock_value_em 返回全量历史（~2107 行/1MB），但持仓穿透只需要最新 1 行（~500B）。
  * 天级缓存只存储最新行，将单次请求的数据量从 1MB 降到 500B，
- * 显著降低对 TopK 的请求频率和带宽消耗。
+ * 显著降低对 AKTools 的请求频率和带宽消耗。
  */
 const needsPush2Supplement = (r) => Boolean(r) && (r.dividendYield == null || r.epsGrowth == null);
 
-const topkFetchStockFundamentals = async (secid, symbol6) => {
+const aktoolsFetchStockFundamentals = async (secid, symbol6) => {
   const qc = getQueryClient();
 
   // 1. TanStack Query 内存缓存（旧缓存可能缺股息率/净利同比，缺失时继续走补充）
@@ -2372,11 +2372,11 @@ const topkFetchStockFundamentals = async (secid, symbol6) => {
     return localCached;
   }
 
-  // 3. TopK Provider 实时请求（pe/pb/ps/peg）
+  // 3. AKTools Provider 实时请求（pe/pb/ps/peg）
   let base = localCached;
   if (!base) {
     try {
-      base = await TOPK_PROVIDER.getStockFundamentals(symbol6, {
+      base = await AKTOOLS_PROVIDER.getStockFundamentals(symbol6, {
         secid,
         market: 'A',
         code: symbol6
@@ -2407,7 +2407,7 @@ const topkFetchStockFundamentals = async (secid, symbol6) => {
 };
 
 // ============================================================================
-// 单股 ROE 补充（东财 F10 主源 + TopK 兜底）
+// 单股 ROE 补充（东财 F10 主源 + AKTools 兜底）
 // 用于持仓穿透估值的 ROE 指标；适用于 A 股与港股。
 // 美股不适用（无东财 F10 ROE 接口），改由 fetchStockUsFinancial 提供。
 // ============================================================================
@@ -2502,9 +2502,9 @@ const fetchEastmoneyF10Roe = (symbol6) => {
  *
  * A 股优先级：
  *   1. 东方财富 F10 主要财务指标（浏览器端 JSONP，主源）
- *   2. TopK / AKShare stock_financial_analysis_indicator（服务端代理，兜底）
+ *   2. AKTools / AKShare stock_financial_analysis_indicator（服务端代理，兜底）
  * 港股：
- *   - TopK / AKShare stock_hk_financial_indicator_em（东财 F10 不覆盖港股，故无主源）
+ *   - AKTools / AKShare stock_hk_financial_indicator_em（东财 F10 不覆盖港股，故无主源）
  *
  * 成功结果按 (market, symbol) 缓存 24h；失败返回 null 且不缓存，便于后续重试。
  *
@@ -2529,7 +2529,7 @@ const fetchStockRoeWithFallback = (symbol, market = 'A') => {
       queryKey,
       queryFn: async () => {
         let roe = null;
-        // 港股无东财 F10 主要财务指标接口，直接走 TopK 的港股财务指标
+        // 港股无东财 F10 主要财务指标接口，直接走 AKTools 的港股财务指标
         if (m === 'A') {
           try {
             roe = await fetchEastmoneyF10Roe(s);
@@ -2539,7 +2539,7 @@ const fetchStockRoeWithFallback = (symbol, market = 'A') => {
         }
         if (roe == null) {
           try {
-            const v = m === 'HK' ? await TOPK_PROVIDER.getStockHkRoe(s) : await TOPK_PROVIDER.getStockRoe(s);
+            const v = m === 'HK' ? await AKTOOLS_PROVIDER.getStockHkRoe(s) : await AKTOOLS_PROVIDER.getStockRoe(s);
             if (isNumber(v) && Number.isFinite(v)) roe = v;
           } catch (e) {
             roe = null;
@@ -2560,11 +2560,11 @@ const fetchStockRoeWithFallback = (symbol, market = 'A') => {
 /**
  * 获取单只美股财务指标（ROE / 盈利增速 / 营收增速）。用于美股持仓穿透估值。
  *
- * 数据源：TopK / AKShare stock_financial_us_analysis_indicator_em（东财美股财务指标）。
+ * 数据源：AKTools / AKShare stock_financial_us_analysis_indicator_em（东财美股财务指标）。
  * 必要性：
  *   - 东财 push2 不提供美股 ROE（f 字段中无 ROE）；
  *   - push2 的 f185（净利润同比）对美股恒为 0（缺失哨兵值），无法作为 epsGrowth；
- *   - TopK 亦无美股估值历史接口（stock_us_* 实测均 500），故成长性指标只能来自本接口。
+ *   - AKTools 亦无美股估值历史接口（stock_us_* 实测均 500），故成长性指标只能来自本接口。
  *
  * 该接口单次 7~38KB / ~0.5s，量级远小于 A 股 stock_value_em（~708KB），
  * 因此只走 TanStack 天级缓存，不再额外引入 localStorage 天级缓存。
@@ -2586,7 +2586,7 @@ const fetchStockUsFinancial = (symbol) => {
   return qc
     .fetchQuery({
       queryKey,
-      queryFn: () => TOPK_PROVIDER.getStockUsFinancial(s),
+      queryFn: () => AKTOOLS_PROVIDER.getStockUsFinancial(s),
       staleTime: STOCK_ROE_STALE_TIME
     })
     .then((data) => {
@@ -3166,9 +3166,9 @@ const parseWeightPercent = (weight) => {
  *   PE  →  E/P 加权倒数法：基金 E/P = Σ(w_i × 1/PE_i)，基金 PE = 1/E/P
  *   其他指标 → 直接加权：基金 metric = Σ(w_i × metric_i)
  *
- * 覆盖市场：A 股（TopK stock_value_em 或东财 push2）、港股（东财 push2）、
+ * 覆盖市场：A 股（AKTools stock_value_em 或东财 push2）、港股（东财 push2）、
  * 美股（东财 push2，105./106. 前缀自动回退）。美股额外的 ROE / 盈利增速 /
- * 营收增速来自 TopK 美股财务指标。
+ * 营收增速来自 AKTools 美股财务指标。
  *
  * @param {string} fundCode - 6 位基金代码
  * @param {(done: number, total: number) => void} [onStockProgress] - 逐只个股估值的进度回调
@@ -3216,7 +3216,7 @@ const fetchHoldingsValuation = async (fundCode, onStockProgress) => {
 
   // 3. A 股 / 港股 / 美股走 fetch（无法识别市场的持仓归入 skipped）
   //    美股估值倍数走东财 push2（105./106. secid，内部自动回退交易所前缀），
-  //    ROE / 盈利增速 / 营收增速另由 TopK 美股财务指标补充。
+  //    ROE / 盈利增速 / 营收增速另由 AKTools 美股财务指标补充。
   const coveredTargets = parsed.filter((x) => x.secid && (x.market === 'A' || x.market === 'HK' || x.market === 'US'));
   // 逐只上报进度：这一段是加载耗时的主要来源之一（每只一次 push2 + 一次 ROE/财务）
   onStockProgress?.(0, coveredTargets.length);
@@ -3226,7 +3226,7 @@ const fetchHoldingsValuation = async (fundCode, onStockProgress) => {
       try {
         const fundamental = await fetchStockFundamentalsBatched(x.secid);
         if (!fundamental || fundamental.__error) return fundamental;
-        // 美股：ROE / 盈利增速 / 营收增速来自 TopK 美股财务指标（push2 无 ROE，f185 恒为 0）
+        // 美股：ROE / 盈利增速 / 营收增速来自 AKTools 美股财务指标（push2 无 ROE，f185 恒为 0）
         if (x.market === 'US') {
           const usFin = await fetchStockUsFinancial(x.code);
           return {
@@ -3523,7 +3523,7 @@ const ensureHoldingsValuationHistory = async (perStock, onJobProgress) => {
           hkSeriesByKey.set(cacheKey, cached);
           return;
         }
-        const series = await TOPK_PROVIDER.getStockHkValueHistory(symbol, metricKey);
+        const series = await AKTOOLS_PROVIDER.getStockHkValueHistory(symbol, metricKey);
         writeCachedStockHkValueHistory(
           symbol,
           metricKey,
@@ -3551,7 +3551,7 @@ const ensureHoldingsValuationHistory = async (perStock, onJobProgress) => {
           aWindowBySymbol.set(symbol, cachedWindow);
           return;
         }
-        const series = await TOPK_PROVIDER.getStockValueHistory(symbol);
+        const series = await AKTOOLS_PROVIDER.getStockValueHistory(symbol);
         const recent = takeRecentRows(series, cutoff);
         if (!recent) {
           aWindowBySymbol.set(symbol, null);
@@ -3682,12 +3682,12 @@ export const fetchFundValuationScore = async (fundCode) => {
     let fundName = '';
     let relatedSectors = [];
     try {
-      const detail = await TOPK_PROVIDER.getFundDetail(c);
+      const detail = await AKTOOLS_PROVIDER.getFundDetail(c);
       fundType = detail?.type || '';
       fundName = detail?.name || '';
     } catch {}
     if (!fundName) {
-      // TopK 详情不可用（能力关闭/服务不可达）时，用本地持仓列表里的名称兜底分类
+      // AKTools 详情不可用（能力关闭/服务不可达）时，用本地持仓列表里的名称兜底分类
       try {
         const arr = storageStore.getItem('funds', []);
         const local = isArray(arr) ? arr.find((x) => x.code === c) : null;
@@ -3796,7 +3796,7 @@ export const fetchFundValuationHistory = async (fundCode, range = DEFAULT_VALUAT
     let fundName = '';
     let relatedSectors = [];
     try {
-      const detail = await TOPK_PROVIDER.getFundDetail(c);
+      const detail = await AKTOOLS_PROVIDER.getFundDetail(c);
       fundType = detail?.type || '';
       fundName = detail?.name || '';
     } catch {}

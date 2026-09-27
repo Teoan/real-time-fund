@@ -1,7 +1,7 @@
 /**
- * TopK mappers 单元测试
+ * AKTools mappers 单元测试
  *
- * 运行：node --test app/providers/topk/__tests__/mappers.test.js
+ * 运行：node --test app/providers/aktools/__tests__/mappers.test.js
  *
  * 覆盖：
  *   - 中文/AKShare 字段 → Domain Model 映射
@@ -26,7 +26,7 @@ import {
   mapStockHkValueHistory,
   mapStockUsFinancial,
   __test__ as mappersInternals
-} from '../topk-mappers.js';
+} from '../aktools-mappers.js';
 
 describe('mapSearchFundRow', () => {
   it('正常行映射', () => {

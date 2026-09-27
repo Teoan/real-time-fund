@@ -254,13 +254,13 @@ const VALUATION_RULES = {
   },
 
   // ========== 美股 ==========
-  // 美股无可用估值历史源（TopK stock_us_valuation_baidu / stock_us_spot_em / stock_us_hist
+  // 美股无可用估值历史源（AKTools stock_us_valuation_baidu / stock_us_spot_em / stock_us_hist
   // 实测均 500），无法计算 PE/PB/PS 历史分位，因此 PE/PB/PS 标记 absolute: true，
   // 在分位缺失时回退到绝对阈值评分；若将来出现可用历史源，分位会自动优先生效。
   //
   // 指标来源：
   //   pe / pb / ps            ← 东财 push2（105./106. secid）
-  //   epsGrowth               ← TopK stock_financial_us_analysis_indicator_em（归母净利润同比）
+  //   epsGrowth               ← AKTools stock_financial_us_analysis_indicator_em（归母净利润同比）
   //   revenueGrowth           ← 同上（营业收入同比）
   //   roe                     ← 同上（ROE_AVG）
   // 未纳入：

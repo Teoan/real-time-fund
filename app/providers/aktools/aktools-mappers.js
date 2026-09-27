@@ -1,5 +1,5 @@
 /**
- * TopK (AKShare) → 项目内部 Domain Model 字段映射器
+ * AKTools (AKShare) → 项目内部 Domain Model 字段映射器
  *
  * 关键原则：
  *   - 任何 AKShare 中文/原始字段名都不得泄漏到业务层

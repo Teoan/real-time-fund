@@ -635,7 +635,7 @@ describe('calculateValuationScore', () => {
     assert.equal(pct.details.find((d) => d.key === 'pe').rawValue, 28.1);
   });
 
-  it('美股：TopK 财务指标不可用时仅剩 PE/PB/PS，置信度降为 55%', () => {
+  it('美股：AKTools 财务指标不可用时仅剩 PE/PB/PS，置信度降为 55%', () => {
     const r = calculateValuationScore({ pe: 28.1, pb: 9.8, ps: 6.1 }, FUND_CATEGORIES.US_STOCK);
     assert.equal(r.confidence, 55);
     assert.equal(r.details.find((d) => d.key === 'roe').contributed, false);

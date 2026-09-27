@@ -1,5 +1,5 @@
 /**
- * TopK Fund Provider
+ * AKTools Fund Provider
  *
  * 暴露与项目内既有 API 命名风格一致的接口：
  *   searchFund(keyword)             -> [{ code, name, type }]
@@ -8,19 +8,19 @@
  *   getFundNavHistory(code, sdate, edate) -> [{ date, unitNav, accumulatedNav, dailyReturn }]
  *   getFundHoldings(code, year?)    -> { reportDate, dataDate, source, holdings: [...] }
  *
- * 所有方法使用注入的缓存抽象（默认 no-op；业务侧通过 createTopKProviderForApp 注入真实缓存）
- * 不实现的接口直接抛 TopKUnsupportedError，由调用方决定 fallback。
+ * 所有方法使用注入的缓存抽象（默认 no-op；业务侧通过 createAktoolsProviderForApp 注入真实缓存）
+ * 不实现的接口直接抛 AktoolsUnsupportedError，由调用方决定 fallback。
  */
 
-import { FundNotFoundError, TopKError, TopKUnsupportedError } from './topk-errors.js';
+import { FundNotFoundError, AktoolsError, AktoolsUnsupportedError } from './aktools-errors.js';
 import {
-  TOPK_CACHE_TTL,
-  TOPK_ENDPOINTS,
-  TOPK_HK_VALUATION_INDICATORS,
-  TOPK_HK_VALUATION_PERIOD,
-  TOPK_METADATA
-} from './topk-config.js';
-import { TOPK_CAPABILITIES, isCapabilitySupported, mergeCapabilities } from './topk-capabilities.js';
+  AKTOOLS_CACHE_TTL,
+  AKTOOLS_ENDPOINTS,
+  AKTOOLS_HK_VALUATION_INDICATORS,
+  AKTOOLS_HK_VALUATION_PERIOD,
+  AKTOOLS_METADATA
+} from './aktools-config.js';
+import { AKTOOLS_CAPABILITIES, isCapabilitySupported, mergeCapabilities } from './aktools-capabilities.js';
 import {
   mapHoldingRow,
   mapNavHistoryRow,
@@ -32,8 +32,8 @@ import {
   mapStockHkRoe,
   mapStockHkValueHistory,
   mapStockUsFinancial
-} from './topk-mappers.js';
-import { createTopKClient } from './topk-client.js';
+} from './aktools-mappers.js';
+import { createAktoolsClient } from './aktools-client.js';
 
 /**
  * 简易并发池（内联，避免 Node ESM 加载项目别名路径）
@@ -59,7 +59,7 @@ async function asyncPool(limit, iterable, iteratorFn) {
  *
  * 历史实现是 no-op（每次调用都直接执行 queryFn），导致 fetchCached 名不副实 ——
  * 同一份 stock_value_em 数据（~708KB）会被 fundamentals / history 两个消费者各拉一次。
- * 这里给出一个有界的内存实现；业务侧仍可通过 createTopKProviderForApp 注入 TanStack 缓存。
+ * 这里给出一个有界的内存实现；业务侧仍可通过 createAktoolsProviderForApp 注入 TanStack 缓存。
  *
  * @param {{ maxEntries?: number }} [options]
  */
@@ -99,7 +99,7 @@ const createMemoryCache = ({ maxEntries = 32 } = {}) => {
 const STOCK_VALUE_ROWS_CACHE_TTL = 10 * 60 * 1000;
 
 /**
- * 创建 TopK Provider
+ * 创建 AKTools Provider
  *
  * @param {object} [options]
  * @param {object} [options.client]
@@ -107,19 +107,19 @@ const STOCK_VALUE_ROWS_CACHE_TTL = 10 * 60 * 1000;
  * @param {number} [options.concurrency]
  * @param {{ fetch: Function }} [options.cache]
  */
-export function createTopKProvider(options = {}) {
-  const client = options.client || createTopKClient(options.clientOptions || {});
+export function createAktoolsProvider(options = {}) {
+  const client = options.client || createAktoolsClient(options.clientOptions || {});
   const concurrency = options.concurrency ?? 4;
   // 缓存按 provider 实例隔离（而非模块级单例），避免不同实例互相污染
   const cache = options.cache || createMemoryCache();
   const capabilities = mergeCapabilities(options.capabilities);
 
   const fetchCached = (cacheKey, queryFn, staleTime) =>
-    cache.fetch({ queryKey: ['topk', ...cacheKey], queryFn, staleTime });
+    cache.fetch({ queryKey: ['aktools', ...cacheKey], queryFn, staleTime });
 
   const searchFund = async (keyword) => {
     if (!isCapabilitySupported(capabilities, 'searchFund')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 searchFund');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 searchFund');
     }
     const normalized = String(keyword || '').trim();
     if (!normalized) return [];
@@ -127,7 +127,7 @@ export function createTopKProvider(options = {}) {
       ['searchFund', normalized],
       async () => {
         try {
-          const rows = await client.call(TOPK_ENDPOINTS.searchFund);
+          const rows = await client.call(AKTOOLS_ENDPOINTS.searchFund);
           if (!Array.isArray(rows)) return [];
           return rows.map(mapSearchFundRow).filter(Boolean);
         } catch (e) {
@@ -135,23 +135,23 @@ export function createTopKProvider(options = {}) {
           throw e;
         }
       },
-      TOPK_CACHE_TTL.searchFund
+      AKTOOLS_CACHE_TTL.searchFund
     );
   };
 
   const getFundDetail = async (code) => {
     if (!isCapabilitySupported(capabilities, 'getFundDetail')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 getFundDetail');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundDetail');
     }
     const c = String(code || '').trim();
-    if (!c) throw new TopKError('基金代码为空');
+    if (!c) throw new AktoolsError('基金代码为空');
     return fetchCached(
       ['fundDetail', c],
       async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getFundDetail, { symbol: c });
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundDetail, { symbol: c });
         const overview = mapOverviewRows(rows);
         if (!overview || Object.keys(overview).length === 0) {
-          throw new FundNotFoundError(`TopK 未找到基金详情: ${c}`);
+          throw new FundNotFoundError(`AKTools 未找到基金详情: ${c}`);
         }
         return {
           code: c,
@@ -167,23 +167,23 @@ export function createTopKProvider(options = {}) {
           rating: overview['基金评级'] || null
         };
       },
-      TOPK_CACHE_TTL.getFundDetail
+      AKTOOLS_CACHE_TTL.getFundDetail
     );
   };
 
   const getFundLatestNav = async (code) => {
     if (!isCapabilitySupported(capabilities, 'getFundLatestNav')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 getFundLatestNav');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundLatestNav');
     }
     const c = String(code || '').trim();
-    if (!c) throw new TopKError('基金代码为空');
+    if (!c) throw new AktoolsError('基金代码为空');
     return fetchCached(
       ['fundLatestNav', c],
       async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getFundLatestNav);
-        if (!Array.isArray(rows)) throw new FundNotFoundError(`TopK latest nav no data: ${c}`);
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundLatestNav);
+        if (!Array.isArray(rows)) throw new FundNotFoundError(`AKTools latest nav no data: ${c}`);
         const row = rows.find((r) => String(r['基金代码'] || '').trim() === c);
-        if (!row) throw new FundNotFoundError(`TopK 未找到基金 ${c} 净值`);
+        if (!row) throw new FundNotFoundError(`AKTools 未找到基金 ${c} 净值`);
         const nav = Number(row['单位净值']);
         return {
           code: c,
@@ -191,28 +191,28 @@ export function createTopKProvider(options = {}) {
           accumulatedNav: Number.isFinite(Number(row['累计净值'])) ? Number(row['累计净值']) : null,
           dailyReturn: Number.isFinite(Number(row['日增长率'])) ? Number(row['日增长率']) : null,
           date: row['净值日期'] || null,
-          source: 'topk'
+          source: 'aktools'
         };
       },
-      TOPK_CACHE_TTL.getFundLatestNav
+      AKTOOLS_CACHE_TTL.getFundLatestNav
     );
   };
 
   const getFundNavHistory = async (code, sdate, edate) => {
     if (!isCapabilitySupported(capabilities, 'getFundNavHistory')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 getFundNavHistory');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundNavHistory');
     }
     const c = String(code || '').trim();
-    if (!c) throw new TopKError('基金代码为空');
+    if (!c) throw new AktoolsError('基金代码为空');
     return fetchCached(
       ['fundNavHistory', c, String(sdate || ''), String(edate || '')],
       async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getFundNavHistory, {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundNavHistory, {
           symbol: c,
           indicator: '单位净值走势'
         });
         if (!Array.isArray(rows) || rows.length === 0) {
-          throw new FundNotFoundError(`TopK 历史净值未找到: ${c}`);
+          throw new FundNotFoundError(`AKTools 历史净值未找到: ${c}`);
         }
         const list = rows
           .map(mapNavHistoryRow)
@@ -230,20 +230,20 @@ export function createTopKProvider(options = {}) {
         }
         return dedup;
       },
-      TOPK_CACHE_TTL.getFundNavHistory
+      AKTOOLS_CACHE_TTL.getFundNavHistory
     );
   };
 
   const getFundHoldings = async (code, year) => {
     if (!isCapabilitySupported(capabilities, 'getFundHoldings')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 getFundHoldings');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundHoldings');
     }
     const c = String(code || '').trim();
-    if (!c) throw new TopKError('基金代码为空');
+    if (!c) throw new AktoolsError('基金代码为空');
     return fetchCached(
       ['fundHoldings', c, year ? String(year) : 'latest'],
       async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getFundHoldings, {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundHoldings, {
           symbol: c,
           date: year ? String(year) : ''
         });
@@ -252,7 +252,7 @@ export function createTopKProvider(options = {}) {
             code: c,
             reportDate: null,
             dataDate: null,
-            source: 'topk',
+            source: 'aktools',
             holdings: []
           };
         }
@@ -262,11 +262,11 @@ export function createTopKProvider(options = {}) {
           code: c,
           reportDate,
           dataDate: reportDate,
-          source: 'topk',
+          source: 'aktools',
           holdings
         };
       },
-      TOPK_CACHE_TTL.getFundHoldings
+      AKTOOLS_CACHE_TTL.getFundHoldings
     );
   };
 
@@ -295,11 +295,11 @@ export function createTopKProvider(options = {}) {
    */
   const fetchStockValueRows = (s) =>
     fetchCached(
-      ['topkStockValueEm', s],
+      ['aktoolsStockValueEm', s],
       async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getStockFundamentals, { symbol: s });
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getStockFundamentals, { symbol: s });
         if (!Array.isArray(rows) || rows.length === 0) {
-          throw new FundNotFoundError(`TopK 未返回单股估值: ${s}`);
+          throw new FundNotFoundError(`AKTools 未返回单股估值: ${s}`);
         }
         return rows;
       },
@@ -312,7 +312,7 @@ export function createTopKProvider(options = {}) {
    * 注意：
    * - AKShare stock_value_em 是历史序列接口，返回约 2100 条日数据
    * - 单次只接受一只股票（不支持 batch），每只股票一次 HTTP 调用
-   * - 股息率 / 净利润同比 TopK 暂无对应接口，固定返回 null（不影响算法）
+   * - 股息率 / 净利润同比 AKTools 暂无对应接口，固定返回 null（不影响算法）
    * - secid 由调用方传入（业务层从 push2 secid 推导），用于返回值填充
    *
    * @param {string} symbol - A 股 6 位代码，如 "600519"
@@ -321,15 +321,15 @@ export function createTopKProvider(options = {}) {
    */
   const getStockFundamentals = async (symbol, ctx = {}) => {
     if (!isCapabilitySupported(capabilities, 'getStockFundamentals')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 getStockFundamentals');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getStockFundamentals');
     }
     const s = String(symbol || '').trim();
     if (!/^\d{6}$/.test(s)) {
-      throw new TopKError(`stock_value_em 仅接受 A 股 6 位代码: ${symbol}`);
+      throw new AktoolsError(`stock_value_em 仅接受 A 股 6 位代码: ${symbol}`);
     }
     const rows = await fetchStockValueRows(s);
     const mapped = mapStockFundamentalLatest(rows, { ...ctx, code: s });
-    if (!mapped) throw new FundNotFoundError(`TopK 未返回单股估值: ${s}`);
+    if (!mapped) throw new FundNotFoundError(`AKTools 未返回单股估值: ${s}`);
     return mapped;
   };
 
@@ -345,15 +345,15 @@ export function createTopKProvider(options = {}) {
    */
   const getStockValueHistory = async (symbol) => {
     if (!isCapabilitySupported(capabilities, 'getStockFundamentals')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 getStockFundamentals');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getStockFundamentals');
     }
     const s = String(symbol || '').trim();
     if (!/^\d{6}$/.test(s)) {
-      throw new TopKError(`stock_value_em 仅接受 A 股 6 位代码: ${symbol}`);
+      throw new AktoolsError(`stock_value_em 仅接受 A 股 6 位代码: ${symbol}`);
     }
     const rows = await fetchStockValueRows(s);
     const series = mapStockValueHistory(rows);
-    if (series.length === 0) throw new FundNotFoundError(`TopK 未返回单股估值历史: ${s}`);
+    if (series.length === 0) throw new FundNotFoundError(`AKTools 未返回单股估值历史: ${s}`);
     return series;
   };
 
@@ -371,22 +371,22 @@ export function createTopKProvider(options = {}) {
    */
   const getStockRoe = async (symbol) => {
     if (!isCapabilitySupported(capabilities, 'getStockRoe')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 getStockRoe');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getStockRoe');
     }
     const s = String(symbol || '').trim();
     if (!/^\d{6}$/.test(s)) {
-      throw new TopKError(`stock_financial_analysis_indicator 仅接受 A 股 6 位代码: ${symbol}`);
+      throw new AktoolsError(`stock_financial_analysis_indicator 仅接受 A 股 6 位代码: ${symbol}`);
     }
     const startYear = String(new Date().getFullYear() - 1);
     return fetchCached(
-      ['topkStockRoe', s],
+      ['aktoolsStockRoe', s],
       async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getStockRoe, { symbol: s, start_year: startYear });
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getStockRoe, { symbol: s, start_year: startYear });
         const roe = mapStockRoe(rows);
-        if (roe == null) throw new FundNotFoundError(`TopK 未返回 ROE: ${s}`);
+        if (roe == null) throw new FundNotFoundError(`AKTools 未返回 ROE: ${s}`);
         return roe;
       },
-      TOPK_CACHE_TTL.getStockRoe
+      AKTOOLS_CACHE_TTL.getStockRoe
     );
   };
 
@@ -401,21 +401,21 @@ export function createTopKProvider(options = {}) {
    */
   const getStockHkRoe = async (symbol) => {
     if (!isCapabilitySupported(capabilities, 'getStockHkFinancial')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 getStockHkFinancial');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getStockHkFinancial');
     }
     const s = String(symbol || '').trim();
     if (!/^\d{4,5}$/.test(s)) {
-      throw new TopKError(`stock_hk_financial_indicator_em 仅接受港股 4~5 位代码: ${symbol}`);
+      throw new AktoolsError(`stock_hk_financial_indicator_em 仅接受港股 4~5 位代码: ${symbol}`);
     }
     return fetchCached(
-      ['topkStockHkRoe', s],
+      ['aktoolsStockHkRoe', s],
       async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getStockHkFinancial, { symbol: s });
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getStockHkFinancial, { symbol: s });
         const roe = mapStockHkRoe(rows);
-        if (roe == null) throw new FundNotFoundError(`TopK 未返回港股 ROE: ${s}`);
+        if (roe == null) throw new FundNotFoundError(`AKTools 未返回港股 ROE: ${s}`);
         return roe;
       },
-      TOPK_CACHE_TTL.getStockHkFinancial
+      AKTOOLS_CACHE_TTL.getStockHkFinancial
     );
   };
 
@@ -435,21 +435,21 @@ export function createTopKProvider(options = {}) {
    */
   const getStockUsFinancial = async (symbol) => {
     if (!isCapabilitySupported(capabilities, 'getStockUsFinancial')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 getStockUsFinancial');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getStockUsFinancial');
     }
     const s = String(symbol || '').trim();
     if (!/^[A-Za-z][A-Za-z0-9._-]{0,9}$/.test(s)) {
-      throw new TopKError(`stock_financial_us_analysis_indicator_em 仅接受美股代码: ${symbol}`);
+      throw new AktoolsError(`stock_financial_us_analysis_indicator_em 仅接受美股代码: ${symbol}`);
     }
     return fetchCached(
-      ['topkStockUsFinancial', s],
+      ['aktoolsStockUsFinancial', s],
       async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getStockUsFinancial, { symbol: s });
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getStockUsFinancial, { symbol: s });
         const financial = mapStockUsFinancial(rows);
-        if (financial == null) throw new FundNotFoundError(`TopK 未返回美股财务指标: ${s}`);
+        if (financial == null) throw new FundNotFoundError(`AKTools 未返回美股财务指标: ${s}`);
         return financial;
       },
-      TOPK_CACHE_TTL.getStockUsFinancial
+      AKTOOLS_CACHE_TTL.getStockUsFinancial
     );
   };
 
@@ -468,31 +468,31 @@ export function createTopKProvider(options = {}) {
    */
   const getStockHkValueHistory = async (symbol, indicatorKey) => {
     if (!isCapabilitySupported(capabilities, 'getStockHkValueHistory')) {
-      throw new TopKUnsupportedError('TopK Provider 未启用 getStockHkValueHistory');
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getStockHkValueHistory');
     }
     const s = String(symbol || '').trim();
     if (!/^\d{4,5}$/.test(s)) {
-      throw new TopKError(`stock_hk_valuation_baidu 仅接受港股 4~5 位代码: ${symbol}`);
+      throw new AktoolsError(`stock_hk_valuation_baidu 仅接受港股 4~5 位代码: ${symbol}`);
     }
-    const indicator = TOPK_HK_VALUATION_INDICATORS[indicatorKey];
+    const indicator = AKTOOLS_HK_VALUATION_INDICATORS[indicatorKey];
     if (!indicator) {
-      throw new TopKUnsupportedError(`港股估值历史不支持指标: ${indicatorKey}`);
+      throw new AktoolsUnsupportedError(`港股估值历史不支持指标: ${indicatorKey}`);
     }
     // 百度要求 5 位补零（00700）；缓存键沿用原始代码，避免 0700 / 00700 重复存储
     const baiduSymbol = s.padStart(5, '0');
     return fetchCached(
-      ['topkStockHkValueHistory', s, String(indicatorKey)],
+      ['aktoolsStockHkValueHistory', s, String(indicatorKey)],
       async () => {
-        const rows = await client.call(TOPK_ENDPOINTS.getStockHkValueHistory, {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getStockHkValueHistory, {
           symbol: baiduSymbol,
           indicator,
-          period: TOPK_HK_VALUATION_PERIOD
+          period: AKTOOLS_HK_VALUATION_PERIOD
         });
         const series = mapStockHkValueHistory(rows, indicatorKey);
-        if (series.length === 0) throw new FundNotFoundError(`TopK 未返回港股估值历史: ${s}`);
+        if (series.length === 0) throw new FundNotFoundError(`AKTools 未返回港股估值历史: ${s}`);
         return series;
       },
-      TOPK_CACHE_TTL.getStockHkValueHistory
+      AKTOOLS_CACHE_TTL.getStockHkValueHistory
     );
   };
 
@@ -517,7 +517,7 @@ export function createTopKProvider(options = {}) {
   const healthCheck = async () => client.healthCheck();
 
   return {
-    metadata: TOPK_METADATA,
+    metadata: AKTOOLS_METADATA,
     capabilities,
     searchFund,
     getFundDetail,
@@ -542,7 +542,7 @@ export function createTopKProvider(options = {}) {
  *
  * 实现：动态 import 项目内的 get-query-client 与 query-keys，避免 Node ESM 加载时找不到 Next.js alias。
  */
-export async function createTopKProviderForApp(options = {}) {
+export async function createAktoolsProviderForApp(options = {}) {
   let getQueryClient = null;
   let qk = null;
   try {
@@ -561,30 +561,30 @@ export async function createTopKProviderForApp(options = {}) {
     async fetch({ queryKey, queryFn, staleTime }) {
       if (!getQueryClient || !qk) return queryFn();
       const qc = getQueryClient();
-      // cacheKey 形如 ['topk', 'searchFund', '110022'] → topkSearchFund('110022')
+      // cacheKey 形如 ['aktools', 'searchFund', '110022'] → aktoolsSearchFund('110022')
       const rest = queryKey.slice(2);
       const factory = qk[queryKey[1]];
       const actualKey = typeof factory === 'function' ? factory(...rest) : queryKey;
       return qc.fetchQuery({ queryKey: actualKey, queryFn, staleTime });
     }
   };
-  return createTopKProvider({ ...options, cache });
+  return createAktoolsProvider({ ...options, cache });
 }
 
-export const defaultTopKProvider = createTopKProvider();
+export const defaultAktoolsProvider = createAktoolsProvider();
 
 /**
  * 业务层统一调用入口（推荐 import）。
  *
- * 与 defaultTopKProvider 等价；能力开关见 topk-capabilities.js 的 DEFAULT_CAPABILITIES
+ * 与 defaultAktoolsProvider 等价；能力开关见 aktools-capabilities.js 的 DEFAULT_CAPABILITIES
  * （当前已开启 getStockFundamentals、getFundDetail，其余默认关闭）。
  * 如需调整某个能力，请修改 DEFAULT_CAPABILITIES 或通过 settingsStore 增加配置项，
  * 并在调用方（如 app/api/fund.js 的 fetchStockFundamentalsBatched）中根据能力
- * 是否启用决定走 TopK 还是 fallback 到原东财 push2 实现。
+ * 是否启用决定走 AKTools 还是 fallback 到原东财 push2 实现。
  *
  * 启用方式（生产）：
- *   const provider = createTopKProvider({
+ *   const provider = createAktoolsProvider({
  *     capabilities: { getStockFundamentals: true }
  *   });
  */
-export const TOPK_PROVIDER = defaultTopKProvider;
+export const AKTOOLS_PROVIDER = defaultAktoolsProvider;

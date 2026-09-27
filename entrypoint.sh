@@ -23,5 +23,8 @@ replace_var "__NEXT_PUBLIC_WEB3FORMS_ACCESS_KEY__" "${NEXT_PUBLIC_WEB3FORMS_ACCE
 replace_var "__NEXT_PUBLIC_GA_ID__" "${NEXT_PUBLIC_GA_ID}"
 replace_var "__NEXT_PUBLIC_GITHUB_LATEST_RELEASE_URL__" "${NEXT_PUBLIC_GITHUB_LATEST_RELEASE_URL}"
 replace_var "__NEXT_PUBLIC_IS_GITHUB_LOGIN__" "${NEXT_PUBLIC_IS_GITHUB_LOGIN}"
+# AKTools 服务地址：未设置时替换为空串，
+# 前端 aktools-config.js 会把空串回落为内置默认地址（不会退化成相对路径请求）
+replace_var "__NEXT_PUBLIC_AKTOOLS_BASE_URL__" "${NEXT_PUBLIC_AKTOOLS_BASE_URL}"
 
 exec nginx -g "daemon off;"
