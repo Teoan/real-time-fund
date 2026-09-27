@@ -14,15 +14,17 @@
  *   key: "topk:stockFundamentals:{symbol}"
  *   value: { data: StockFundamental, date: "2026-09-07", ts: 1725744000000 }
  *
- * 港股估值序列（stock_hk_indicator_eniu，单次 6~18s、数据静态）同样使用本模块的天级缓存：
+ * 港股估值序列（stock_hk_valuation_baidu，单指标 ~17~45KB、数据到当日）同样使用本模块的天级缓存：
  *   key: "topk:hkValueHistory:{symbol}:{pe|pb}"
  *   value: { data: [{ date, value }], ts: 1725744000000 }
- *   ⚠️ 仅缓存参与分位计算的时间窗（近 5 年 ~200 行），全量 4000 行会占满配额。
+ *   ⚠️ 仅缓存参与计算的时间窗（近 5 年）。该序列同时服务「当前分位」与「近 1/3 月区间走势」。
  *
  * A 股分位窗口（stock_value_em 单次 ~708KB / 2117 行，但分位只需近 5 年窗口）：
  *   key: "topk:stockValueWindow:{symbol}"
- *   value: { data: { values: { pe: number[], pb: number[], ps: number[] }, latest: row }, ts }
- *   ⚠️ 只落数值数组 + 最后一行，全量落盘约 708KB/只会迅速占满配额。
+ *   value: { data: { values: { pe: number[], pb: number[], ps: number[] }, latest: row,
+ *                    recent: [{date,pe,pb,ps}] }, ts }
+ *   ⚠️ values 只落数值数组；recent 是区间走势用的带日期序列，
+ *      近端日频、远端抽稀，总点数封顶（约 22KB/只）。全量落盘约 708KB/只会迅速占满配额。
  *
  * 注意：
  *   - 仅在浏览器环境使用（localStorage 不存在于 SSR）
@@ -37,8 +39,12 @@ const HK_CACHE_PREFIX = 'topk:hkValueHistory:';
 const VALUE_WINDOW_CACHE_PREFIX = 'topk:stockValueWindow:';
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 小时强制过期
 const CACHE_VERSION = 1;
-const HK_CACHE_VERSION = 1;
-const VALUE_WINDOW_CACHE_VERSION = 1;
+// v2：港股估值序列数据源由 eniu（止于 2022-07-13）改为 baidu（数据到当日）。
+// 旧缓存内容是陈旧数据，必须靠版本号失效，否则会继续用 4 年前的区间算分位。
+const HK_CACHE_VERSION = 2;
+// v3：recent 从「近 3 个月日频」扩展为「近 5 年（近端日频 + 远端抽稀）」，
+//     以支持近 6 月 / 近 1 年 / 近 3 年 / 成立来；旧缓存的 recent 太短，必须失效
+const VALUE_WINDOW_CACHE_VERSION = 3;
 /** 缓存前缀 → 期望版本（清理工具按族校验版本） */
 const CACHE_FAMILIES = {
   [CACHE_PREFIX]: CACHE_VERSION,
@@ -167,9 +173,9 @@ export const getCachedStockHkValueHistory = (symbol, indicator) =>
 /**
  * 写入港股单股估值序列的天级缓存。
  *
- * ⚠️ 调用方应只写入「参与计算的时间窗」（例如近 5 年 ~200 行）。
- * 上游 eniu 全量历史约 4000 行 / 单指标 ~140KB，10 只港股 × 2 指标 ≈ 2.8MB，
- * 直接落盘会迅速占满 localStorage 配额并影响项目其它数据写入。
+ * ⚠️ 调用方应只写入「参与计算的时间窗」（近 5 年，实测约 914 行/指标）。
+ * 该序列同时服务「当前分位」与「近 1/3 月区间走势」。
+ * 若不裁剪，多只港股 × 2 指标会显著占用 localStorage 配额。
  *
  * @param {string} symbol - 港股 4~5 位代码
  * @param {'pe'|'pb'} indicator
@@ -182,10 +188,11 @@ export const writeCachedStockHkValueHistory = (symbol, indicator, series) => {
 
 /**
  * 查询 A 股分位窗口的天级缓存。
- * 结构见模块头注释：只保存近 5 年窗口的各指标数值数组 + 窗口最后一行。
+ * 结构见模块头注释：近 5 年窗口的各指标数值数组 + 窗口最后一行 + 区间走势序列（recent）。
  *
  * @param {string} symbol - 6 位 A 股代码
- * @returns {{ values: { pe: number[], pb: number[], ps: number[] }, latest: object|null }|null}
+ * @returns {{ values: { pe: number[], pb: number[], ps: number[] }, latest: object|null,
+ *             recent: Array<{ date: string, pe: number|null, pb: number|null, ps: number|null }> }|null}
  */
 export const getCachedStockValueWindow = (symbol) =>
   readEntry(`${VALUE_WINDOW_CACHE_PREFIX}${String(symbol || '').trim()}`, VALUE_WINDOW_CACHE_VERSION);
@@ -195,9 +202,10 @@ export const getCachedStockValueWindow = (symbol) =>
  *
  * ⚠️ 调用方必须只写入「分位所需的时间窗」（近 5 年），不要落 stock_value_em 全量：
  * 全量 2117 行 ≈ 708KB/只，10 只持仓会迅速占满 localStorage 配额。
+ * recent 序列由调用方抽稀到总点数上限后再写入（见 fund.js 的 buildTrendSeries）。
  *
  * @param {string} symbol - 6 位 A 股代码
- * @param {{ values: { pe: number[], pb: number[], ps: number[] }, latest: object|null }} window
+ * @param {{ values: object, latest: object|null, recent: Array }} window
  */
 export const writeCachedStockValueWindow = (symbol, window) => {
   if (!window || !window.values) return;

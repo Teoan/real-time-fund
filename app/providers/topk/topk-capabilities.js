@@ -22,6 +22,7 @@
  * @property {boolean} getStockRoe - A 股个股 ROE（加权净资产收益率），东财 F10 直连不可用时的兜底数据源
  * @property {boolean} getStockHkFinancial - 港股个股财务指标快照（含股东权益回报率 ROE），用于港股持仓穿透
  * @property {boolean} getStockHkValueHistory - 港股个股估值历史序列（市盈率/市净率），用于港股持仓历史分位
+ * @property {boolean} getStockUsFinancial - 美股个股财务指标（ROE/盈利增速/营收增速/毛利率），用于美股持仓穿透
  */
 
 const DEFAULT_CAPABILITIES = {
@@ -48,7 +49,11 @@ const DEFAULT_CAPABILITIES = {
   getStockHkFinancial: true,
   // 联调通过（2026-09-19）：stock_hk_valuation_baidu 200 / ~30KB / ~0.1s。
   // 仅支持市盈率(TTM) / 市净率（市销率、股息率上游 500），用于港股 PE/PB 历史分位。
-  getStockHkValueHistory: true
+  getStockHkValueHistory: true,
+  // 联调通过（2026-09-26）：stock_financial_us_analysis_indicator_em 200 / 7~38KB / ~0.5s，
+  // 返回按报告期排列的财务指标，取最新一期的 ROE_AVG / 净利同比 / 营收同比 / 毛利率。
+  // 是美股持仓 ROE 与成长性指标的唯一来源（东财 push2 无 ROE，且 f185 对美股恒为 0）。
+  getStockUsFinancial: true
 };
 
 export const TOPK_CAPABILITIES = Object.freeze({ ...DEFAULT_CAPABILITIES });

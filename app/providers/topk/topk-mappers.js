@@ -282,9 +282,57 @@ export const mapStockHkRoe = (rows) => {
 };
 
 /**
- * stock_hk_indicator_eniu 单指标序列 → 按日期升序的估值历史
+ * stock_financial_us_analysis_indicator_em 整段历史 → 最近一期报告的美股财务指标
  *
- * 接口返回 [{ date, <指标键>, price }]（英文键，单指标），例如市盈率为 pe、市净率为 pb。
+ * 接口返回按报告期排列的二维表（实测单只 7~35 行，含年报/季报），每行一个报告期。
+ * 取 REPORT_DATE 最大的一行，映射为美股持仓穿透所需的成长性与盈利质量指标：
+ *   roe           ← ROE_AVG                        （平均净资产收益率，%）
+ *   epsGrowth     ← PARENT_HOLDER_NETPROFIT_YOY    （归母净利润同比，%）
+ *   revenueGrowth ← OPERATE_INCOME_YOY             （营业收入同比，%）
+ *   grossMargin   ← GROSS_PROFIT_RATIO             （毛利率，%；跨行业不可比，仅备用不参与打分）
+ *   reportDate    ← REPORT_DATE
+ *   currency      ← CURRENCY_ABBR
+ *
+ * ⚠️ 美股 ROE 受回购影响系统性偏高（实测 AAPL 171% / NVDA 101%），业务层已下调其权重。
+ *
+ * @param {Array<object>} rows
+ * @returns {{ roe: number|null, epsGrowth: number|null, revenueGrowth: number|null,
+ *             grossMargin: number|null, reportDate: string|null, currency: string|null }|null}
+ */
+export const mapStockUsFinancial = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const sorted = rows
+    .filter((r) => r && typeof r === 'object')
+    .sort((a, b) => {
+      const da = pickString(a['REPORT_DATE']) || '';
+      const db = pickString(b['REPORT_DATE']) || '';
+      return da < db ? -1 : da > db ? 1 : 0;
+    });
+  const row = sorted[sorted.length - 1];
+  if (!row) return null;
+
+  const result = {
+    roe: toFiniteNumber(row['ROE_AVG']),
+    epsGrowth: toFiniteNumber(row['PARENT_HOLDER_NETPROFIT_YOY']),
+    revenueGrowth: toFiniteNumber(row['OPERATE_INCOME_YOY']),
+    grossMargin: toFiniteNumber(row['GROSS_PROFIT_RATIO']),
+    reportDate: toIsoDate(row['REPORT_DATE']),
+    currency: pickString(row['CURRENCY_ABBR'])
+  };
+
+  // 全部指标缺失视为无效（避免把空报告当成有效结果缓存）
+  const hasAny =
+    result.roe != null || result.epsGrowth != null || result.revenueGrowth != null || result.grossMargin != null;
+  return hasAny ? result : null;
+};
+
+/**
+ * 港股单指标估值序列 → 按日期升序的估值历史
+ *
+ * 兼容两种上游形态：
+ *   - stock_hk_valuation_baidu（当前采用）：[{ date, value }] —— 走 valueKey 回退分支
+ *   - stock_hk_indicator_eniu（已弃用）：[{ date, <指标键>, price }]，如市盈率为 pe、市净率为 pb
+ *
  * 通过 valueKey 指定取哪个指标列，归一为统一的 { date, value } 结构并过滤非法行。
  *
  * @param {Array<object>} rows

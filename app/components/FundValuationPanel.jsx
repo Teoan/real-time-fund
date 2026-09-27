@@ -1,8 +1,9 @@
 'use client';
 
-import { Loader2 } from 'lucide-react';
 import { CATEGORY_NAMES } from '@/app/lib/fundClassifier';
 import FundValuationBadge from './FundValuationBadge';
+import FundValuationHistory from './FundValuationHistory';
+import ValuationProgressBar from './ValuationProgressBar';
 
 /**
  * 估值指标行
@@ -75,25 +76,24 @@ function ScoreBar({ score }) {
  *   3. 基金分类
  *   4. 各指标明细（原始值 / 评分 / 权重）
  *   5. 持仓覆盖率
+ *   6. 区间走势（近 1 月 / 近 3 月，需要有 estimating 历史的持仓市场）
  *
- * @param {{ valuation: object|null, isLoading?: boolean }} props
+ * @param {{ valuation: object|null, isLoading?: boolean, code?: string, historyDefaultExpanded?: boolean }} props
  */
-export default function FundValuationPanel({ valuation, isLoading = false }) {
+export default function FundValuationPanel({
+  valuation,
+  isLoading = false,
+  code = '',
+  historyDefaultExpanded = false
+}) {
   if (isLoading) {
     return (
-      <div
-        style={{
-          padding: '16px 0',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 8,
-          color: 'var(--muted)'
-        }}
-      >
-        <Loader2 className="animate-spin" size={20} />
-        <span style={{ fontSize: '13px' }}>正基于持仓计算历史分位…</span>
-        <span style={{ fontSize: '11px', opacity: 0.7 }}>逐只拉取个股估值历史，约需数秒</span>
+      <div style={{ padding: '14px 0' }}>
+        {/* 进度条由 app/api/fund.js 逐只/逐项上报真实进度，见 ValuationProgressBar */}
+        <ValuationProgressBar progressKey={code} fallbackLabel="正基于持仓计算历史分位…" />
+        <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: 8, opacity: 0.7 }}>
+          逐只拉取个股估值与历史分位，约需数秒
+        </div>
       </div>
     );
   }
@@ -197,6 +197,9 @@ export default function FundValuationPanel({ valuation, isLoading = false }) {
           ))}
         </>
       )}
+
+      {/* 区间走势：近 1 月 / 近 3 月 */}
+      {code ? <FundValuationHistory code={code} defaultExpanded={historyDefaultExpanded} /> : null}
 
       {/* 更新时间 */}
       {valuation.updatedAt && (

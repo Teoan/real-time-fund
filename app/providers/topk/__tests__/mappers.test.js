@@ -24,6 +24,7 @@ import {
   mapStockRoe,
   mapStockHkRoe,
   mapStockHkValueHistory,
+  mapStockUsFinancial,
   __test__ as mappersInternals
 } from '../topk-mappers.js';
 
@@ -363,6 +364,65 @@ describe('mapStockHkRoe', () => {
     assert.equal(mapStockHkRoe([{ 市盈率: 14 }]), null);
     assert.equal(mapStockHkRoe([]), null);
     assert.equal(mapStockHkRoe(null), null);
+  });
+});
+
+describe('mapStockUsFinancial', () => {
+  // 实测 stock_financial_us_analysis_indicator_em 返回的行（截取关键列）
+  const usRows = [
+    {
+      REPORT_DATE: '2024-09-28 00:00:00',
+      ROE_AVG: 157.4125075569,
+      PARENT_HOLDER_NETPROFIT_YOY: -3.3599670086,
+      OPERATE_INCOME_YOY: 2.0219940775,
+      GROSS_PROFIT_RATIO: 46.2063498152,
+      CURRENCY_ABBR: 'USD'
+    },
+    {
+      REPORT_DATE: '2025-09-27 00:00:00',
+      ROE_AVG: 171.4224497448,
+      PARENT_HOLDER_NETPROFIT_YOY: 19.4951779466,
+      OPERATE_INCOME_YOY: 6.4255117828,
+      GROSS_PROFIT_RATIO: 46.9051641072,
+      CURRENCY_ABBR: 'USD'
+    }
+  ];
+
+  it('取最新报告期并映射为领域字段（不泄漏 AKShare 列名）', () => {
+    const out = mapStockUsFinancial(usRows);
+    assert.equal(out.roe, 171.4224497448);
+    assert.equal(out.epsGrowth, 19.4951779466);
+    assert.equal(out.revenueGrowth, 6.4255117828);
+    assert.equal(out.grossMargin, 46.9051641072);
+    assert.equal(out.reportDate, '2025-09-27');
+    assert.equal(out.currency, 'USD');
+    // 不得出现 AKShare 原始列名
+    assert.equal(Object.prototype.hasOwnProperty.call(out, 'ROE_AVG'), false);
+  });
+
+  it('乱序输入也取最新报告期', () => {
+    const out = mapStockUsFinancial([usRows[1], usRows[0]]);
+    assert.equal(out.reportDate, '2025-09-27');
+  });
+
+  it('部分指标缺失 → 该字段 null，其余保留', () => {
+    const out = mapStockUsFinancial([
+      { REPORT_DATE: '2025-09-27 00:00:00', ROE_AVG: 30.25, OPERATE_INCOME_YOY: 'NaN' }
+    ]);
+    assert.equal(out.roe, 30.25);
+    assert.equal(out.revenueGrowth, null);
+    assert.equal(out.epsGrowth, null);
+  });
+
+  it('全部指标缺失 → null（避免把空报告当有效结果缓存）', () => {
+    assert.equal(mapStockUsFinancial([{ REPORT_DATE: '2025-09-27 00:00:00' }]), null);
+  });
+
+  it('空/非法输入 → null', () => {
+    assert.equal(mapStockUsFinancial([]), null);
+    assert.equal(mapStockUsFinancial(null), null);
+    assert.equal(mapStockUsFinancial(undefined), null);
+    assert.equal(mapStockUsFinancial('not-an-array'), null);
   });
 });
 

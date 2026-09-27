@@ -76,7 +76,7 @@ const VALUATION_RULES = {
     name: '红利/高股息',
     indicators: [
       { key: 'dividendYieldPercentile', weight: 0.3 },
-      { key: 'dividendYield', weight: 0.2, usePercentile: true },
+      { key: 'dividendYield', weight: 0.2, usePercentile: true, absolute: true },
       { key: 'pbPercentile', weight: 0.2 },
       { key: 'pePercentile', weight: 0.15 },
       { key: 'roe', weight: 0.1 },
@@ -153,7 +153,7 @@ const VALUATION_RULES = {
     indicators: [
       { key: 'pbPercentile', weight: 0.3 },
       { key: 'roe', weight: 0.25 },
-      { key: 'dividendYield', weight: 0.2, usePercentile: true },
+      { key: 'dividendYield', weight: 0.2, usePercentile: true, absolute: true },
       { key: 'pePercentile', weight: 0.1 },
       { key: 'nplRatio', weight: 0.1 },
       { key: 'capitalAdequacy', weight: 0.05 }
@@ -208,7 +208,7 @@ const VALUATION_RULES = {
     indicators: [
       { key: 'pbPercentile', weight: 0.3 },
       { key: 'pePercentile', weight: 0.15 },
-      { key: 'dividendYield', weight: 0.15, usePercentile: true },
+      { key: 'dividendYield', weight: 0.15, usePercentile: true, absolute: true },
       { key: 'evEbitda', weight: 0.2 },
       { key: 'roe', weight: 0.1 },
       { key: 'psPercentile', weight: 0.1 }
@@ -219,7 +219,7 @@ const VALUATION_RULES = {
   [FUND_CATEGORIES.REITS]: {
     name: 'REITs',
     indicators: [
-      { key: 'dividendYield', weight: 0.35, usePercentile: true },
+      { key: 'dividendYield', weight: 0.35, usePercentile: true, absolute: true },
       { key: 'dividendYieldPercentile', weight: 0.25 },
       { key: 'pbPercentile', weight: 0.2 },
       { key: 'pePercentile', weight: 0.2 }
@@ -253,11 +253,40 @@ const VALUATION_RULES = {
     pegThresholds: DEFAULT_PEG_THRESHOLDS
   },
 
+  // ========== 美股 ==========
+  // 美股无可用估值历史源（TopK stock_us_valuation_baidu / stock_us_spot_em / stock_us_hist
+  // 实测均 500），无法计算 PE/PB/PS 历史分位，因此 PE/PB/PS 标记 absolute: true，
+  // 在分位缺失时回退到绝对阈值评分；若将来出现可用历史源，分位会自动优先生效。
+  //
+  // 指标来源：
+  //   pe / pb / ps            ← 东财 push2（105./106. secid）
+  //   epsGrowth               ← TopK stock_financial_us_analysis_indicator_em（归母净利润同比）
+  //   revenueGrowth           ← 同上（营业收入同比）
+  //   roe                     ← 同上（ROE_AVG）
+  // 未纳入：
+  //   peg        —— 无美股 PEG 数据源
+  //   grossMargin—— 跨行业不可比（实测 SMCI 10.8% vs META 82.0%）
+  //   dividendYield —— 美股低股息会被阈值判为"贵"，与成长型口径冲突
+  // ROE 仅给 0.10：美股回购导致 ROE 系统性虚高（实测 AAPL 171% / NVDA 101%），
+  // 通用阈值会把 ≥25% 一律判为便宜，需限制其影响。
+  [FUND_CATEGORIES.US_STOCK]: {
+    name: '美股',
+    indicators: [
+      { key: 'pe', weight: 0.25, usePercentile: true, absolute: true },
+      { key: 'pb', weight: 0.15, usePercentile: true, absolute: true },
+      { key: 'ps', weight: 0.15, usePercentile: true, absolute: true },
+      { key: 'epsGrowth', weight: 0.2 },
+      { key: 'revenueGrowth', weight: 0.15 },
+      { key: 'roe', weight: 0.1 }
+    ],
+    note: '美股无历史分位源，PE/PB/PS 采用绝对阈值；ROE 已降权以抵消回购导致的虚高'
+  },
+
   // ========== 债券 ==========
   [FUND_CATEGORIES.BOND]: {
     name: '债券',
     indicators: [
-      { key: 'dividendYield', weight: 0.5, usePercentile: true },
+      { key: 'dividendYield', weight: 0.5, usePercentile: true, absolute: true },
       { key: 'dividendYieldPercentile', weight: 0.5 }
     ],
     note: '债券基金主要看到期收益率/分红率，不适用 PE/PB 估值'

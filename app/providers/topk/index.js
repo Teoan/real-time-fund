@@ -15,7 +15,8 @@ export {
   TOPK_ENDPOINTS,
   TOPK_CACHE_TTL,
   TOPK_BASE_URL,
-  TOPK_HK_VALUATION_INDICATORS
+  TOPK_HK_VALUATION_INDICATORS,
+  TOPK_HK_VALUATION_PERIOD
 } from './topk-config.js';
 
 export {
@@ -41,7 +42,8 @@ export {
   mapStockValueHistory,
   mapStockRoe,
   mapStockHkRoe,
-  mapStockHkValueHistory
+  mapStockHkValueHistory,
+  mapStockUsFinancial
 } from './topk-mappers.js';
 
 export { createTopKProvider, defaultTopKProvider, TOPK_PROVIDER } from './topk-provider.js';

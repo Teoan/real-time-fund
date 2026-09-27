@@ -13,13 +13,17 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyFund, FUND_CATEGORIES, CATEGORY_NAMES } from '../fundClassifier.js';
+import { classifyFund, FUND_CATEGORIES, CATEGORY_NAMES, refineClassificationByHoldings } from '../fundClassifier.js';
 import { getValuationRule, VALUATION_RULES } from '../valuationRules.js';
 import {
   calculateValuationScore,
   pegToScore,
   dividendYieldToScore,
   epsGrowthToScore,
+  revenueGrowthToScore,
+  peToScore,
+  pbToScore,
+  psToScore,
   roeToScore,
   computePercentile,
   scoreToRating,
@@ -165,6 +169,88 @@ describe('classifyFund', () => {
     for (const cat of Object.values(FUND_CATEGORIES)) {
       assert.ok(CATEGORY_NAMES[cat], `Missing name for ${cat}`);
     }
+  });
+
+  // ========== 美股（US_STOCK）==========
+
+  it('名称含纳斯达克 → us_stock（017436 实盘用例）', () => {
+    const r = classifyFund('QDII', [], '华宝纳斯达克精选股票发起式(QDII)A');
+    assert.equal(r.category, FUND_CATEGORIES.US_STOCK);
+  });
+
+  it('名称含标普500 → us_stock', () => {
+    assert.equal(classifyFund('QDII', [], '博时标普500ETF联接(QDII)A').category, FUND_CATEGORIES.US_STOCK);
+  });
+
+  it('名称含美国/美股 → us_stock', () => {
+    assert.equal(classifyFund('QDII', [], '华夏美国股票(QDII)').category, FUND_CATEGORIES.US_STOCK);
+    assert.equal(classifyFund('', [], '某某美股精选').category, FUND_CATEGORIES.US_STOCK);
+  });
+
+  it('「标普中国A股红利」不被误判为美股（裸标普不匹配）', () => {
+    const r = classifyFund('指数型-股票', [], '标普中国A股红利指数');
+    assert.notEqual(r.category, FUND_CATEGORIES.US_STOCK);
+    assert.equal(r.category, FUND_CATEGORIES.DIVIDEND);
+  });
+
+  it('「道琼斯88」是道琼斯中国88指数（A 股），不被误判为美股', () => {
+    const r = classifyFund('指数型-股票', [], '银华-道琼斯88指数');
+    assert.notEqual(r.category, FUND_CATEGORIES.US_STOCK);
+    // 真正的美股道琼斯产品仍应命中
+    assert.equal(classifyFund('', [], '鹏华道琼斯工业平均ETF(QDII)').category, FUND_CATEGORIES.US_STOCK);
+    assert.equal(classifyFund('', [], '南方道琼斯美国精选A').category, FUND_CATEGORIES.US_STOCK);
+  });
+
+  it('美国债券(QDII) 不落进美股股票规则', () => {
+    const r = classifyFund('QDII', [], '工银美国债券(QDII)');
+    assert.notEqual(r.category, FUND_CATEGORIES.US_STOCK);
+    // QDII 类型兜底优先于债券兜底（TYPE_RULES 既有顺序，未因本次改动调整）
+    assert.equal(r.category, FUND_CATEGORIES.QDII);
+  });
+
+  it('板块字段同样支持美股关键词与 exclude', () => {
+    assert.equal(classifyFund('', ['纳斯达克100指数']).category, FUND_CATEGORIES.US_STOCK);
+    assert.notEqual(classifyFund('', ['美国国债指数']).category, FUND_CATEGORIES.US_STOCK);
+  });
+});
+
+// ========== 持仓市场构成修正分类 ==========
+
+describe('refineClassificationByHoldings', () => {
+  const base = { category: FUND_CATEGORIES.TECH, confidence: 0.7, matchedBy: 'name:x' };
+
+  it('美股权重 ≥50% → 修正为 us_stock', () => {
+    const r = refineClassificationByHoldings(base, [
+      { market: 'US', weight: 8.1 },
+      { market: 'US', weight: 7.9 },
+      { market: 'HK', weight: 5.0 }
+    ]);
+    assert.equal(r.category, FUND_CATEGORIES.US_STOCK);
+    assert.equal(r.matchedBy, 'holdings:us');
+  });
+
+  it('美股权重 <50% → 维持原分类', () => {
+    const r = refineClassificationByHoldings(base, [
+      { market: 'US', weight: 4.0 },
+      { market: 'HK', weight: 6.0 }
+    ]);
+    assert.equal(r.category, FUND_CATEGORIES.TECH);
+    assert.equal(r.matchedBy, 'name:x');
+  });
+
+  it('已是 us_stock → 原样返回', () => {
+    const us = { category: FUND_CATEGORIES.US_STOCK, confidence: 0.7, matchedBy: 'name:纳斯达克' };
+    assert.equal(refineClassificationByHoldings(us, [{ market: 'A', weight: 10 }]).category, FUND_CATEGORIES.US_STOCK);
+  });
+
+  it('空持仓 / 无法识别市场 → 维持原分类', () => {
+    assert.equal(refineClassificationByHoldings(base, []).category, FUND_CATEGORIES.TECH);
+    assert.equal(refineClassificationByHoldings(base, undefined).category, FUND_CATEGORIES.TECH);
+    assert.equal(refineClassificationByHoldings(base, [{ market: null, weight: 9 }]).category, FUND_CATEGORIES.TECH);
+  });
+
+  it('classification 缺失 → 兜底 other', () => {
+    assert.equal(refineClassificationByHoldings(null, []).category, FUND_CATEGORIES.OTHER);
   });
 });
 
@@ -332,6 +418,56 @@ describe('computePercentile', () => {
   });
 });
 
+describe('绝对阈值评分（美股规则的 PE/PB/PS 回退口径）', () => {
+  it('peToScore：越低越便宜', () => {
+    assert.equal(peToScore(6), 10);
+    assert.equal(peToScore(10), 25);
+    assert.equal(peToScore(20), 55);
+    assert.equal(peToScore(30), 70);
+    assert.equal(peToScore(60), 95);
+    assert.ok(peToScore(10) < peToScore(40));
+  });
+
+  it('peToScore：亏损/非法值 → null', () => {
+    assert.equal(peToScore(-5), null);
+    assert.equal(peToScore(0), null);
+    assert.equal(peToScore(NaN), null);
+    assert.equal(peToScore(null), null);
+  });
+
+  it('pbToScore：越低越便宜', () => {
+    assert.equal(pbToScore(0.8), 10);
+    assert.equal(pbToScore(2.5), 40);
+    assert.equal(pbToScore(6), 70);
+    assert.equal(pbToScore(20), 95);
+    assert.equal(pbToScore(-1), null);
+  });
+
+  it('psToScore：越低越便宜', () => {
+    assert.equal(psToScore(0.7), 10);
+    assert.equal(psToScore(3), 40);
+    assert.equal(psToScore(9), 70);
+    assert.equal(psToScore(25), 95);
+    assert.equal(psToScore(0), null);
+  });
+
+  it('revenueGrowthToScore：增速越高分越低', () => {
+    assert.equal(revenueGrowthToScore(40), 15);
+    assert.equal(revenueGrowthToScore(20), 30);
+    assert.equal(revenueGrowthToScore(10), 45);
+    assert.equal(revenueGrowthToScore(2), 58);
+    assert.equal(revenueGrowthToScore(-20), 85);
+    assert.equal(revenueGrowthToScore(NaN), null);
+  });
+
+  it('normalizeToScore 已接入新指标键', () => {
+    assert.equal(engineInternals.normalizeToScore('pe', 20), 55);
+    assert.equal(engineInternals.normalizeToScore('pb', 2.5), 40);
+    assert.equal(engineInternals.normalizeToScore('ps', 3), 40);
+    assert.equal(engineInternals.normalizeToScore('revenueGrowth', 20), 30);
+  });
+});
+
 describe('scoreToRating', () => {
   it('各分界点', () => {
     assert.equal(scoreToRating(0).label, '极度低估');
@@ -471,12 +607,71 @@ describe('calculateValuationScore', () => {
     assert.equal(r.score, null);
     assert.equal(r.confidence, 0);
   });
+
+  // ========== 美股规则 ==========
+
+  it('美股：无历史分位时 PE/PB/PS 走绝对阈值，6 项指标全部参与', () => {
+    const r = calculateValuationScore(
+      { pe: 28.1, pb: 9.8, ps: 6.1, epsGrowth: 19.5, revenueGrowth: 6.4, roe: 30 },
+      FUND_CATEGORIES.US_STOCK
+    );
+    assert.equal(r.confidence, 100);
+    for (const key of ['pe', 'pb', 'ps', 'epsGrowth', 'revenueGrowth', 'roe']) {
+      const d = r.details.find((x) => x.key === key);
+      assert.equal(d.contributed, true, `${key} 应参与评分`);
+    }
+    // 无分位时不得出现分位指标
+    assert.equal(
+      r.details.some((d) => d.key.endsWith('Percentile')),
+      false
+    );
+  });
+
+  it('美股：分位数据存在时优先于绝对阈值', () => {
+    // pe=28.1 绝对值 → 70 分；pePercentile=10 → 10 分
+    const abs = calculateValuationScore({ pe: 28.1, pb: 9.8, ps: 6.1 }, FUND_CATEGORIES.US_STOCK);
+    const pct = calculateValuationScore({ pe: 28.1, pePercentile: 10, pb: 9.8, ps: 6.1 }, FUND_CATEGORIES.US_STOCK);
+    assert.ok(pct.score < abs.score, `分位应更低（更便宜）：${pct.score} vs ${abs.score}`);
+    assert.equal(pct.details.find((d) => d.key === 'pe').rawValue, 28.1);
+  });
+
+  it('美股：TopK 财务指标不可用时仅剩 PE/PB/PS，置信度降为 55%', () => {
+    const r = calculateValuationScore({ pe: 28.1, pb: 9.8, ps: 6.1 }, FUND_CATEGORIES.US_STOCK);
+    assert.equal(r.confidence, 55);
+    assert.equal(r.details.find((d) => d.key === 'roe').contributed, false);
+    assert.equal(r.details.find((d) => d.key === 'epsGrowth').contributed, false);
+  });
+
+  it('回归护栏：宽基指数未开启 absolute，缺分位时 pe 不得被绝对阈值兜底', () => {
+    const r = calculateValuationScore({ pe: 12, roe: 15, epsGrowth: 10 }, FUND_CATEGORIES.BROAD_INDEX);
+    const peDetail = r.details.find((d) => d.key === 'pe');
+    assert.equal(peDetail.contributed, false, 'pe 应保持不计入（依赖历史分位）');
+    assert.equal(peDetail.score, null);
+    // 仅 roe(0.1) + epsGrowth(0.1) 参与 → 20%
+    assert.equal(r.confidence, 20);
+  });
+
+  it('回归护栏：红利型股息率缺分位时仍回退阈值评分（absolute: true 显式声明）', () => {
+    const r = calculateValuationScore({ dividendYield: 5 }, FUND_CATEGORIES.DIVIDEND);
+    const d = r.details.find((x) => x.key === 'dividendYield');
+    assert.equal(d.contributed, true);
+    assert.equal(d.score, 10);
+  });
 });
 
 describe('extractMetricsFromHoldingsValuation', () => {
   it('正常提取', () => {
     const hv = {
-      metrics: { pe: 15, pb: 2, ps: 3, peg: 1.2, epsGrowth: 20, dividendYield: 3.5, roe: 16.75 }
+      metrics: {
+        pe: 15,
+        pb: 2,
+        ps: 3,
+        peg: 1.2,
+        epsGrowth: 20,
+        revenueGrowth: 6.4,
+        dividendYield: 3.5,
+        roe: 16.75
+      }
     };
     const m = extractMetricsFromHoldingsValuation(hv);
     assert.equal(m.pe, 15);
@@ -484,8 +679,14 @@ describe('extractMetricsFromHoldingsValuation', () => {
     assert.equal(m.ps, 3);
     assert.equal(m.peg, 1.2);
     assert.equal(m.epsGrowth, 20);
+    assert.equal(m.revenueGrowth, 6.4);
     assert.equal(m.dividendYield, 3.5);
     assert.equal(m.roe, 16.75);
+  });
+
+  it('缺失的 revenueGrowth（A 股/港股）归一为 null', () => {
+    const m = extractMetricsFromHoldingsValuation({ metrics: { pe: 15, epsGrowth: 20 } });
+    assert.equal(m.revenueGrowth, null);
   });
 
   it('缺失的 roe 归一为 null', () => {

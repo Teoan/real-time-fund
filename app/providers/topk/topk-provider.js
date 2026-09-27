@@ -13,7 +13,13 @@
  */
 
 import { FundNotFoundError, TopKError, TopKUnsupportedError } from './topk-errors.js';
-import { TOPK_CACHE_TTL, TOPK_ENDPOINTS, TOPK_HK_VALUATION_INDICATORS, TOPK_METADATA } from './topk-config.js';
+import {
+  TOPK_CACHE_TTL,
+  TOPK_ENDPOINTS,
+  TOPK_HK_VALUATION_INDICATORS,
+  TOPK_HK_VALUATION_PERIOD,
+  TOPK_METADATA
+} from './topk-config.js';
 import { TOPK_CAPABILITIES, isCapabilitySupported, mergeCapabilities } from './topk-capabilities.js';
 import {
   mapHoldingRow,
@@ -24,7 +30,8 @@ import {
   mapStockValueHistory,
   mapStockRoe,
   mapStockHkRoe,
-  mapStockHkValueHistory
+  mapStockHkValueHistory,
+  mapStockUsFinancial
 } from './topk-mappers.js';
 import { createTopKClient } from './topk-client.js';
 
@@ -413,11 +420,47 @@ export function createTopKProvider(options = {}) {
   };
 
   /**
-   * 港股单股估值历史序列（用于历史分位）。
+   * 美股单股财务指标（ROE / 盈利增速 / 营收增速 / 毛利率）。用于美股持仓穿透估值。
    *
-   * 数据源：AKShare stock_hk_indicator_eniu（亿牛网），单次只返回一个指标。
-   * 仅支持 'pe' / 'pb'（该接口的市销率字段实为市值、非 PS 比率，故未纳入）。
-   * 注意：亿牛网港股个股数据止于 2022-07-13（站点已「未收录」），详见 topk-config 注释。
+   * 数据源：AKShare stock_financial_us_analysis_indicator_em（东财美股财务指标）。
+   * 东财 push2 不提供美股 ROE，且 f185（净利润同比）对美股恒为 0（缺失哨兵值），
+   * 因此本方法是美股 ROE 与成长性指标的唯一来源。
+   *
+   * 注意：该接口只接受 symbol，附加 indicator / period 等参数会返回 500（实测）。
+   * 返回值中的 grossMargin 跨行业不可比，业务层不参与打分。
+   *
+   * @param {string} symbol - 美股代码，如 "AAPL" / "BRK.B"
+   * @returns {Promise<{ roe: number|null, epsGrowth: number|null, revenueGrowth: number|null,
+   *                     grossMargin: number|null, reportDate: string|null, currency: string|null }>}
+   */
+  const getStockUsFinancial = async (symbol) => {
+    if (!isCapabilitySupported(capabilities, 'getStockUsFinancial')) {
+      throw new TopKUnsupportedError('TopK Provider 未启用 getStockUsFinancial');
+    }
+    const s = String(symbol || '').trim();
+    if (!/^[A-Za-z][A-Za-z0-9._-]{0,9}$/.test(s)) {
+      throw new TopKError(`stock_financial_us_analysis_indicator_em 仅接受美股代码: ${symbol}`);
+    }
+    return fetchCached(
+      ['topkStockUsFinancial', s],
+      async () => {
+        const rows = await client.call(TOPK_ENDPOINTS.getStockUsFinancial, { symbol: s });
+        const financial = mapStockUsFinancial(rows);
+        if (financial == null) throw new FundNotFoundError(`TopK 未返回美股财务指标: ${s}`);
+        return financial;
+      },
+      TOPK_CACHE_TTL.getStockUsFinancial
+    );
+  };
+
+  /**
+   * 港股单股估值历史序列（用于历史分位 + 近 1/3 月区间走势）。
+   *
+   * 数据源：AKShare stock_hk_valuation_baidu（百度股市通），单次只返回一个指标。
+   * 仅支持 'pe' / 'pb'（上游「市销率」返回 500，故无港股 psPercentile）。
+   *
+   * 2026-09-26 由 eniu 切换为本源：eniu 数据止于 2022-07-13，用它算「近 5 年分位」
+   * 等于拿 4 年前的区间与今天的值比较；baidu 数据到当日，同时满足分位与区间走势两个用途。
    *
    * @param {string} symbol - 港股 4~5 位代码，如 "00700"
    * @param {'pe'|'pb'} indicatorKey - 领域指标名
@@ -429,20 +472,21 @@ export function createTopKProvider(options = {}) {
     }
     const s = String(symbol || '').trim();
     if (!/^\d{4,5}$/.test(s)) {
-      throw new TopKError(`stock_hk_indicator_eniu 仅接受港股 4~5 位代码: ${symbol}`);
+      throw new TopKError(`stock_hk_valuation_baidu 仅接受港股 4~5 位代码: ${symbol}`);
     }
     const indicator = TOPK_HK_VALUATION_INDICATORS[indicatorKey];
     if (!indicator) {
       throw new TopKUnsupportedError(`港股估值历史不支持指标: ${indicatorKey}`);
     }
-    // 亿牛网要求 5 位补零 + 'hk' 前缀（如 00700 → hk00700）；缓存键沿用未补零的原始代码
-    const eniuSymbol = `hk${s.padStart(5, '0')}`;
+    // 百度要求 5 位补零（00700）；缓存键沿用原始代码，避免 0700 / 00700 重复存储
+    const baiduSymbol = s.padStart(5, '0');
     return fetchCached(
       ['topkStockHkValueHistory', s, String(indicatorKey)],
       async () => {
         const rows = await client.call(TOPK_ENDPOINTS.getStockHkValueHistory, {
-          symbol: eniuSymbol,
-          indicator
+          symbol: baiduSymbol,
+          indicator,
+          period: TOPK_HK_VALUATION_PERIOD
         });
         const series = mapStockHkValueHistory(rows, indicatorKey);
         if (series.length === 0) throw new FundNotFoundError(`TopK 未返回港股估值历史: ${s}`);
@@ -487,6 +531,7 @@ export function createTopKProvider(options = {}) {
     getStockRoe,
     getStockHkRoe,
     getStockHkValueHistory,
+    getStockUsFinancial,
     healthCheck
   };
 }

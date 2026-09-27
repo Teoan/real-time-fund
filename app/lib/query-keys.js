@@ -62,6 +62,12 @@ export const stockFundamentals = (secid) => ['stockFundamentals', String(secid |
  */
 export const stockRoe = (market, symbol) => ['stockRoe', String(market || 'A'), String(symbol || '').trim()];
 
+/**
+ * 美股单股财务指标合并缓存键（ROE / 盈利增速 / 营收增速 / 毛利率），值为对象或 null
+ * @param {string} symbol
+ */
+export const stockUsFinancial = (symbol) => ['stockUsFinancial', String(symbol || '').trim()];
+
 // ============================================================================
 // TopK Provider 查询键
 // ============================================================================
@@ -104,6 +110,9 @@ export const topkStockRoe = (symbol) => ['topk', 'stockRoe', String(symbol || ''
 /** @param {string} symbol - TopK 港股单股 ROE 缓存键（4~5 位港股代码） */
 export const topkStockHkRoe = (symbol) => ['topk', 'stockHkRoe', String(symbol || '').trim()];
 
+/** @param {string} symbol - TopK 美股单股财务指标缓存键（美股代码，如 AAPL） */
+export const topkStockUsFinancial = (symbol) => ['topk', 'topkStockUsFinancial', String(symbol || '').trim()];
+
 /** @param {string} symbol @param {string} indicatorKey - TopK 港股单股估值历史缓存键 */
 export const topkStockHkValueHistory = (symbol, indicatorKey) => [
   'topk',
@@ -117,3 +126,10 @@ export const topkHealth = () => ['topk', 'health'];
 
 /** @param {string} fundCode - 基金估值评分缓存键 */
 export const fundValuationScore = (fundCode) => ['fundValuationScore', String(fundCode || '').trim()];
+
+/** @param {string} fundCode @param {'1m'|'3m'} range - 基金估值区间走势缓存键 */
+export const fundValuationHistory = (fundCode, range) => [
+  'fundValuationHistory',
+  String(fundCode || '').trim(),
+  String(range || '')
+];

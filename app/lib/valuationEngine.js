@@ -101,6 +101,82 @@ export function epsGrowthToScore(growthPct) {
 }
 
 /**
+ * 营收增速评分（原始值阈值映射）
+ * 营收增速越高 = 成长性越强 = 相对越"便宜"（分越低）；数值单位为 %
+ *
+ * 用于美股规则：美股无可用估值历史，成长性指标（TopK 美股财务指标）承担主要区分度。
+ *
+ * @param {number} growthPct - 营业收入同比（%）
+ * @returns {number|null} 0-100 分
+ */
+export function revenueGrowthToScore(growthPct) {
+  if (!Number.isFinite(growthPct)) return null;
+  if (growthPct >= 30) return 15;
+  if (growthPct >= 15) return 30;
+  if (growthPct >= 8) return 45;
+  if (growthPct >= 0) return 58;
+  if (growthPct >= -10) return 72;
+  return 85;
+}
+
+/**
+ * PE-TTM 绝对阈值评分（分位数据缺失时的回退口径）
+ * PE 越低 = 越便宜 = 分越低；数值单位为倍。
+ *
+ * 仅在规则项显式声明 `absolute: true` 时启用（如美股规则）——
+ * A 股/港股宽基等规则依赖历史分位，不应被绝对阈值改写。
+ *
+ * @param {number} pe
+ * @returns {number|null} 0-100 分
+ */
+export function peToScore(pe) {
+  if (!Number.isFinite(pe) || pe <= 0) return null; // 亏损（PE 为负/0）无法用 PE 衡量
+  if (pe < 8) return 10;
+  if (pe < 12) return 25;
+  if (pe < 18) return 40;
+  if (pe < 25) return 55;
+  if (pe < 35) return 70;
+  if (pe < 50) return 85;
+  return 95;
+}
+
+/**
+ * PB 绝对阈值评分（分位数据缺失时的回退口径）
+ * PB 越低 = 越便宜 = 分越低；数值单位为倍。
+ *
+ * @param {number} pb
+ * @returns {number|null} 0-100 分
+ */
+export function pbToScore(pb) {
+  if (!Number.isFinite(pb) || pb <= 0) return null;
+  if (pb < 1) return 10;
+  if (pb < 2) return 25;
+  if (pb < 3) return 40;
+  if (pb < 5) return 55;
+  if (pb < 8) return 70;
+  if (pb < 12) return 85;
+  return 95;
+}
+
+/**
+ * PS 绝对阈值评分（分位数据缺失时的回退口径）
+ * PS 越低 = 越便宜 = 分越低；数值单位为倍。
+ *
+ * @param {number} ps
+ * @returns {number|null} 0-100 分
+ */
+export function psToScore(ps) {
+  if (!Number.isFinite(ps) || ps <= 0) return null;
+  if (ps < 1) return 10;
+  if (ps < 2) return 25;
+  if (ps < 4) return 40;
+  if (ps < 7) return 55;
+  if (ps < 12) return 70;
+  if (ps < 20) return 85;
+  return 95;
+}
+
+/**
  * ROE 评分（原始值阈值映射，行业无关的粗略口径）
  * ROE 越高 = 盈利能力越强 = 相对越"便宜"（分越低）
  * 数值单位为 %
@@ -155,12 +231,24 @@ export function normalizeToScore(key, value, indicatorDef) {
   if (key === 'epsGrowth') {
     return epsGrowthToScore(value);
   }
+  if (key === 'revenueGrowth') {
+    return revenueGrowthToScore(value);
+  }
+  if (key === 'pe') {
+    return peToScore(value);
+  }
+  if (key === 'pb') {
+    return pbToScore(value);
+  }
+  if (key === 'ps') {
+    return psToScore(value);
+  }
   if (key === 'roe') {
     return roeToScore(value);
   }
 
   // 其他指标暂时返回 null（需要历史分位才能评分）
-  // 后续可扩展：revenueGrowth、fcf、grossMargin 等
+  // 后续可扩展：fcf、grossMargin 等
   return null;
 }
 
@@ -209,7 +297,7 @@ export function calculateValuationScore(metrics, classification) {
   let totalWeight = 0;
   const details = [];
 
-  for (const { key, weight, usePercentile } of indicators) {
+  for (const { key, weight, usePercentile, absolute } of indicators) {
     const rawValue = metrics?.[key];
     const indicatorDef = getIndicatorDef(key);
 
@@ -222,15 +310,19 @@ export function calculateValuationScore(metrics, classification) {
       // 分位数直接映射
       score = normalizeToScore(key, rawValue, indicatorDef);
     } else if (usePercentile && rawValue != null) {
-      // 标记为 usePercentile 的指标（如股息率），优先用历史分位评分；
-      // 分位数据缺失时回退到原始值阈值评分（如股息率 4%+ → 低分），
-      // 避免"有当前值却完全不参与评分"
+      // 标记为 usePercentile 的指标优先用历史分位评分；
+      // 分位数据缺失时，仅当规则项显式声明 absolute: true 才回退到原始值阈值评分。
+      // 显式开关是必要的：PE/PB/PS 的阈值映射同时被美股规则使用，
+      // 若此处无条件回退，会把「依赖历史分位」的 A 股宽基等规则一并改写。
       const percentileKey = `${key}Percentile`;
       const percentileValue = metrics?.[percentileKey];
-      score =
-        percentileValue != null
-          ? normalizeToScore(percentileKey, percentileValue, indicatorDef)
-          : normalizeToScore(key, rawValue, indicatorDef);
+      if (percentileValue != null) {
+        score = normalizeToScore(percentileKey, percentileValue, indicatorDef);
+      } else if (absolute === true) {
+        score = normalizeToScore(key, rawValue, indicatorDef);
+      } else {
+        score = null;
+      }
     } else {
       score = normalizeToScore(key, rawValue, indicatorDef);
     }
@@ -292,6 +384,7 @@ export function extractMetricsFromHoldingsValuation(holdingsValuation) {
     ps: m.ps ?? null,
     peg: m.peg ?? null,
     epsGrowth: m.epsGrowth ?? null,
+    revenueGrowth: m.revenueGrowth ?? null,
     dividendYield: m.dividendYield ?? null,
     roe: m.roe ?? null
   };
@@ -301,6 +394,10 @@ export const __test__ = {
   pegToScore,
   dividendYieldToScore,
   epsGrowthToScore,
+  revenueGrowthToScore,
+  peToScore,
+  pbToScore,
+  psToScore,
   roeToScore,
   normalizeToScore,
   computePercentile,

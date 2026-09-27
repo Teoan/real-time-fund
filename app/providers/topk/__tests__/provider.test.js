@@ -625,12 +625,13 @@ describe('TopK Provider - getStockHkRoe', () => {
 });
 
 describe('TopK Provider - getStockHkValueHistory', () => {
+  // 百度股市通形态：单指标序列 [{ date, value }]
   const hkRows = [
-    { date: '2022-07-13', pe: 13.76, price: 0 },
-    { date: '2006-03-23', pe: 44.77, price: 0 }
+    { date: '2026-09-26', value: 14.64 },
+    { date: '2021-09-26', value: 19.53 }
   ];
 
-  it('正常响应 → 升序序列，且领域指标映射为上游指标名、代码补零加 hk 前缀', async () => {
+  it('正常响应 → 升序序列，命中 baidu 接口并带 period', async () => {
     let capturedUrl = '';
     await withMockFetch(
       async (url) => {
@@ -644,24 +645,27 @@ describe('TopK Provider - getStockHkValueHistory', () => {
         });
         const out = await provider.getStockHkValueHistory('00700', 'pe');
         assert.equal(out.length, 2);
-        assert.equal(out[0].date, '2006-03-23');
-        assert.equal(out[1].value, 13.76);
+        assert.equal(out[0].date, '2021-09-26');
+        assert.equal(out[0].value, 19.53);
+        assert.equal(out[1].value, 14.64);
       }
     );
     const u = new URL(capturedUrl);
-    assert.equal(u.pathname.endsWith('/stock_hk_indicator_eniu'), true);
-    // 4~5 位代码需补零并加 hk 前缀
-    assert.equal(u.searchParams.get('symbol'), 'hk00700');
-    // 业务层只传领域字段名 'pe'，上游中文指标名不得泄漏到调用方
-    assert.equal(u.searchParams.get('indicator'), '市盈率');
+    assert.equal(u.pathname.endsWith('/stock_hk_valuation_baidu'), true);
+    // 百度用纯 5 位代码，不加 hk 前缀
+    assert.equal(u.searchParams.get('symbol'), '00700');
+    // 近五年同时覆盖分位窗口与近 1/3 月走势
+    assert.equal(u.searchParams.get('period'), '近五年');
+    // 业务层只传领域字段名 'pe'；上游指标名必须精确为「市盈率(TTM)」（「市盈率」会 500）
+    assert.equal(u.searchParams.get('indicator'), '市盈率(TTM)');
   });
 
-  it('4 位代码补零为 5 位', async () => {
+  it('4 位代码补零为 5 位（仍不加 hk 前缀）', async () => {
     let capturedUrl = '';
     await withMockFetch(
       async (url) => {
         capturedUrl = url;
-        return okJson({ success: true, data: [{ date: '2022-07-13', pb: 3.17 }] });
+        return okJson({ success: true, data: [{ date: '2026-09-26', value: 3.04 }] });
       },
       async () => {
         const provider = createTopKProvider({
@@ -672,7 +676,7 @@ describe('TopK Provider - getStockHkValueHistory', () => {
         assert.equal(out.length, 1);
       }
     );
-    assert.equal(new URL(capturedUrl).searchParams.get('symbol'), 'hk00700');
+    assert.equal(new URL(capturedUrl).searchParams.get('symbol'), '00700');
     assert.equal(new URL(capturedUrl).searchParams.get('indicator'), '市净率');
   });
 
@@ -701,6 +705,122 @@ describe('TopK Provider - getStockHkValueHistory', () => {
           capabilities: { getStockHkValueHistory: true }
         });
         await assert.rejects(provider.getStockHkValueHistory('00700', 'pe'), FundNotFoundError);
+      }
+    );
+  });
+});
+
+describe('TopK Provider - getStockUsFinancial', () => {
+  const usRows = [
+    {
+      REPORT_DATE: '2025-09-27 00:00:00',
+      ROE_AVG: 171.42,
+      PARENT_HOLDER_NETPROFIT_YOY: 19.5,
+      OPERATE_INCOME_YOY: 6.43,
+      GROSS_PROFIT_RATIO: 46.91,
+      CURRENCY_ABBR: 'USD'
+    }
+  ];
+
+  it('正常响应 → 映射为美股财务指标并命中正确接口', async () => {
+    let seenUrl = '';
+    await withMockFetch(
+      async (url) => {
+        seenUrl = String(url);
+        return okJson({ success: true, data: usRows });
+      },
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockUsFinancial: true }
+        });
+        const out = await provider.getStockUsFinancial('AAPL');
+        assert.equal(out.roe, 171.42);
+        assert.equal(out.epsGrowth, 19.5);
+        assert.equal(out.revenueGrowth, 6.43);
+        assert.equal(out.grossMargin, 46.91);
+        assert.equal(out.reportDate, '2025-09-27');
+      }
+    );
+    assert.ok(seenUrl.includes('stock_financial_us_analysis_indicator_em'), `应调用美股财务指标接口，实际：${seenUrl}`);
+    assert.ok(seenUrl.includes('symbol=AAPL'), `应带 symbol=AAPL，实际：${seenUrl}`);
+    // 该接口只接受 symbol，附加参数会 500
+    assert.equal(seenUrl.includes('indicator='), false);
+    assert.equal(seenUrl.includes('period='), false);
+  });
+
+  it('同一标的重复调用命中缓存（只发一次请求）', async () => {
+    let calls = 0;
+    await withMockFetch(
+      async () => {
+        calls += 1;
+        return okJson({ success: true, data: usRows });
+      },
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockUsFinancial: true }
+        });
+        await provider.getStockUsFinancial('AAPL');
+        await provider.getStockUsFinancial('AAPL');
+      }
+    );
+    assert.equal(calls, 1);
+  });
+
+  it('带点代码（BRK.B）通过校验并发起请求', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: usRows }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockUsFinancial: true }
+        });
+        const out = await provider.getStockUsFinancial('BRK.B');
+        assert.equal(out.roe, 171.42);
+      }
+    );
+  });
+
+  it('非法标的（以数字开头/空）→ TopKError', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockUsFinancial: true }
+    });
+    await assert.rejects(provider.getStockUsFinancial('600519'), /仅接受美股代码/);
+    await assert.rejects(provider.getStockUsFinancial(''), /仅接受美股代码/);
+  });
+
+  it('能力显式禁用 → TopKUnsupportedError', async () => {
+    const provider = createTopKProvider({
+      client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getStockUsFinancial: false }
+    });
+    await assert.rejects(provider.getStockUsFinancial('AAPL'), TopKUnsupportedError);
+  });
+
+  it('空数据 → FundNotFoundError', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [] }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockUsFinancial: true }
+        });
+        await assert.rejects(provider.getStockUsFinancial('AAPL'), FundNotFoundError);
+      }
+    );
+  });
+
+  it('全部指标缺失 → FundNotFoundError（不缓存空结果）', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [{ REPORT_DATE: '2025-09-27 00:00:00' }] }),
+      async () => {
+        const provider = createTopKProvider({
+          client: createTopKClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getStockUsFinancial: true }
+        });
+        await assert.rejects(provider.getStockUsFinancial('AAPL'), FundNotFoundError);
       }
     );
   });

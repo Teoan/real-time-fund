@@ -23,43 +23,129 @@ app/providers/topk/
 
 ## 当前状态
 
-| 业务能力                  | 实现        | 真实 TopK 联调                  |
-| ------------------------- | ----------- | ------------------------------- |
-| searchFund                | ✅          | ❌ 待联调                       |
-| getFundDetail             | ✅          | ✅ 2026-09-13                   |
-| getFundLatestNav          | ✅          | ❌ 待联调                       |
-| getFundNavHistory         | ✅          | ❌ 待联调                       |
-| getFundHoldings           | ✅          | ❌ 待联调                       |
-| getStockFundamentals      | ✅          | ✅ 2026-09（stock_value_em）    |
-| getStockRoe               | ✅          | ✅ 2026-09-19（新浪财务指标）   |
-| getStockHkFinancial       | ✅          | ✅ 2026-09-19（港股财务指标）   |
-| getStockHkValueHistory    | ✅          | ✅ 2026-09-20（亿牛网估值历史） |
-| 其它（manager / rank 等） | ❌ 暂未实现 | ❌                              |
+| 业务能力                  | 实现        | 真实 TopK 联调                      |
+| ------------------------- | ----------- | ----------------------------------- |
+| searchFund                | ✅          | ❌ 待联调                           |
+| getFundDetail             | ✅          | ✅ 2026-09-13                       |
+| getFundLatestNav          | ✅          | ❌ 待联调                           |
+| getFundNavHistory         | ✅          | ❌ 待联调                           |
+| getFundHoldings           | ✅          | ❌ 待联调                           |
+| getStockFundamentals      | ✅          | ✅ 2026-09（stock_value_em）        |
+| getStockRoe               | ✅          | ✅ 2026-09-19（新浪财务指标）       |
+| getStockHkFinancial       | ✅          | ✅ 2026-09-19（港股财务指标）       |
+| getStockHkValueHistory    | ✅          | ✅ 2026-09-26（百度股市通估值历史） |
+| getStockUsFinancial       | ✅          | ✅ 2026-09-26（美股财务指标）       |
+| 其它（manager / rank 等） | ❌ 暂未实现 | ❌                                  |
 
 ## 港股持仓穿透（getStockHkFinancial / getStockHkValueHistory）
 
 - **getStockHkFinancial**：AKShare `stock_hk_financial_indicator_em`，取「股东权益回报率(%)」作为港股 ROE。
   东财 F10 主要财务指标不覆盖港股，故这是港股 ROE 的唯一来源。
-- **getStockHkValueHistory**：AKShare `stock_hk_indicator_eniu`（亿牛网），取市盈率 / 市净率历史序列，用于港股 PE/PB 历史分位。
+- **getStockHkValueHistory**：AKShare `stock_hk_valuation_baidu`（百度股市通），取市盈率(TTM) / 市净率历史序列，
+  用于港股 PE/PB 历史分位**与近 1/3 月区间走势**。
   业务层只传领域字段名 `pe` / `pb`，上游中文指标名在 `topk-config.js` 的 `TOPK_HK_VALUATION_INDICATORS` 中映射；
-  代码需补零为 5 位并加 `hk` 前缀（`00700` → `hk00700`）。
-- **实测（2026-09-20）**：financial 200 / ~0.7KB / ~0.15s；indicator_eniu 200 / ~140~190KB / 6~18s（较慢）。
+  代码补零为 5 位（`0700` → `00700`，**不加** `hk` 前缀），并固定带 `period=近五年`。
+- **实测（2026-09-26）**：financial 200 / ~0.7KB / ~0.15s；valuation_baidu 200 / ~17~45KB，数据到当日。
 
-### ⚠️ 已知限制：eniu 港股数据止于 2022-07-13
+### 数据源变更：eniu → baidu（2026-09-26）
 
-亿牛网已下线港股个股页面（`eniu.com/gu/hk00700` 返回「未收录此股票」），AKShare 只能返回存档数据 ——
-实测 00700 / 09988 / 00939 / 03690 的 PE、PB 序列**最后日期均为 2022-07-13**。
+原先用 `stock_hk_indicator_eniu`（亿牛网），但亿牛网已下线港股个股页（`eniu.com/gu/hk00700` 返回「未收录此股票」），
+AKShare 只能返回存档数据 —— 实测 00700 / 09988 / 00939 / 03690 的 PE、PB 序列**最后日期均为 2022-07-13**。
 
-配合「近 5 年」分位窗口，港股 PE/PB 分位实际基于 **2021-09 ~ 2022-07** 的区间，
-即用 2026 年的当前值与 4 年前的估值窗口比较，存在系统性偏差（这是选型时已知并接受的取舍）。
+这意味着「近 5 年分位」实际是拿 **2021-09 ~ 2022-07** 的区间与**今天的值**比较，存在系统性偏差。
+改用 `stock_hk_valuation_baidu` 后数据到当日（实测末点即当天），分位口径恢复正常，
+同时其尾部数据直接用于区间走势，无需二次请求。
 
-- 若需要新鲜数据，应改用 `stock_hk_valuation_baidu`（数据到当日，但 2004 起仅 ~626 行、密度低）。
-  两源口径一致（304 个重合交易日，相关系数 0.967，均值 41.95 vs 41.45），也可合并使用。
-- `stock_hk_indicator_eniu` 的「市销率」返回字段实为 `market_value`（市值）而非 PS 比率，不可用于 `psPercentile`。
-- 该接口单次 6~18s，`app/api/fund.js` 的 `calculateHoldingsPercentiles` 已用 `asyncPool(4)` 并发预取，
-  且序列经 `topk-daily-cache.js` 做**天级 localStorage 缓存**（键 `topk:hkValueHistory:{symbol}:{pe|pb}`）：
-  首次加载约 20~30s，当日再次打开直接命中缓存、不再发请求。
-  缓存只写入参与分位计算的近 5 年窗口（~200 行/指标），避免 4000 行全量（约 2.8MB）占满 localStorage 配额。
+⚠️ 指标名必须精确：`市盈率` → 500，只有 `市盈率(TTM)` 可用；`市销率` → 500（故港股无 `psPercentile`）。
+
+### 缓存
+
+序列经 `topk-daily-cache.js` 做**天级 localStorage 缓存**（键 `topk:hkValueHistory:{symbol}:{pe|pb}`），
+只写入近 5 年窗口（约 914 行/指标）。切换到 baidu 后 `HK_CACHE_VERSION` 已从 1 提升到 2，
+使旧的 eniu 陈旧缓存自动失效（否则会继续用 4 年前的区间算分位）。
+
+## 估值区间走势（近 1 月 ~ 成立来）
+
+`app/lib/valuationHistory.js` 把当前时点的评分流程在区间内的每个日期上重放，得到评分走势与区间统计。
+区间档位与「业绩走势」一致：**近 1 月 / 近 3 月 / 近 6 月 / 近 1 年 / 近 3 年 / 成立来**。
+
+- **A 股**：复用 `stock_value_em` 的近端估值点。分位窗口缓存新增 `recent` 字段
+  （**带日期**的 {pe,pb,ps} 序列）——原有的 `values` 数组刻意不带日期且按指标过滤，
+  无法按日对齐，故必须单独保留。
+- **港股**：直接复用上面的 baidu 序列（`period=近五年`，约 913 点，同时满足分位窗口与 5 年走势）。
+- **美股**：无可用估值历史源，不参与区间走势（UI 会提示）。
+
+### 体积控制（`recent` 序列）
+
+区间扩展到 5 年后需要覆盖整个分位窗口（A 股约 1210 行）。按日频整段落盘约 67KB/只，
+因此 `buildTrendSeries` 做两级压缩：
+
+1. **抽稀**：近端 130 行保留日频（近 1~6 月精度不受影响），远端按需抽稀，总点数封顶 320。
+2. **降精度**：`roundMetric` 把 PE/PB/PS 保留 4 位小数。
+   `stock_value_em` 返回全精度浮点（`18.98901221999999`），JSON 里每个数要占 12+ 字符，
+   而 4 位小数对分位排序毫无影响 —— 仅此一项就把分位数值数组 + 走势序列的体积砍掉约三分之一。
+
+效果：约 **45KB/只**（与扩展前基本持平，但走势覆盖从 3 个月提升到 5 年）。
+缓存按 `symbol` 索引，多只基金持有同一只股票只存一份。
+
+### 已知近似
+
+区间内各日期的分位统一使用「当前时点的近 5 年分布」作为参照，而非每个历史日各自回看的窗口。
+区间越短影响越小（1~3 个月该窗口仅平移约 1~5%）；区间越长，其含义越偏向
+「该历史估值在**当前 5 年分布**中的位置」——好处是全区间用同一把尺子、各点可比，
+代价是早期点位带入后验信息。
+
+「成立来」取「全部可用数据（最多近 5 年）」，**不是基金成立日**：本模块用的是持仓股票的估值历史，
+不是基金自身净值。A 股虽可取到 8.5 年（2018 起），但港股百度只到 5 年，
+且超过 5 年的点位无法与「当前 5 年分布」同尺度比较。UI 会显示实际覆盖区间并给出上限提示。
+
+长区间下的分位计算用 `createRanker`（先排序参照分布、再二分求秩）代替逐点线性扫描，
+把每个点位的复杂度从 O(n) 降到 O(log n)：实测近 3 年 / 成立来（约 650~1030 个点）单次计算 3~6ms。
+
+## 美股持仓穿透（getStockUsFinancial）
+
+- **数据源**：AKShare `stock_financial_us_analysis_indicator_em`（东财美股财务指标），取最新报告期一行：
+  `ROE_AVG` → `roe`、`PARENT_HOLDER_NETPROFIT_YOY` → `epsGrowth`、`OPERATE_INCOME_YOY` → `revenueGrowth`、
+  `GROSS_PROFIT_RATIO` → `grossMargin`（仅备用，跨行业不可比，不参与打分）。
+- **定位**：东财 push2 不提供美股 ROE，且其 `f185`（净利润同比）对美股恒为 `0.0`（缺失哨兵值），
+  因此本接口是美股 ROE 与成长性指标的唯一来源。业务层 `app/api/fund.js` 的 `fetchStockUsFinancial`
+  合并到 push2 拿到的 PE/PB/PS 上。
+- **实测（2026-09-26）**：HTTP 200 / 单只 7~38KB / ~0.5s。⚠️ 该接口**只接受 `symbol`**，
+  附加 `indicator` / `period` 会返回 500。
+- 数据量小、耗时短，因此只走 TanStack 24h 缓存，**不做** localStorage 天级缓存
+  （与港股估值序列需按天缓存的情况不同）。
+
+### 美股估值倍数走东财 push2（非 TopK）
+
+美股当前 PE/PB/PS/股息率由东财 `push2delay` 提供，业务层在 `normalizeSecid` 中解析 secid：
+
+- `105.` = 纳斯达克、`106.` = 纽交所。解析时先用 `105.`，失败后用 `usSecidFallback` 回退 `106.`
+  （实测 `105.JPM` / `105.V` / `105.XOM` 无数据，`106.*` 正常）。
+- 带点/带横线代码在东财口径中写作下划线：`BRK.B` → `106.BRK_B`
+  （`106.BRK.B` 无数据；此前代码截断成 `105.BRK`，必然失败）。
+- 美股 `f185` 归一为 `null`（缺失哨兵值），`f126` 为 `"-"` 时同样归一为 `null`。
+
+### ⚠️ 已知限制：不存在可用的美股估值历史源
+
+2026-09-26 实测结论（区分「404 = 接口未暴露」与「500 = 接口存在但上游报错」）：
+
+| 接口                                                                                                                                         | 结果                                |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `stock_financial_us_analysis_indicator_em`                                                                                                   | ✅ 200                              |
+| `stock_us_daily`                                                                                                                             | ✅ 200，但仅 OHLCV 价格，无估值比率 |
+| `index_us_stock_sina`                                                                                                                        | ✅ 200（美股指数）                  |
+| `stock_us_spot_em` / `stock_us_famous_spot_em` / `stock_us_hist` / `stock_us_hist_min_em`                                                    | ❌ 500                              |
+| `stock_us_valuation_baidu`（市盈率(TTM)/市净率/市销率/市盈率(静)/总市值 × 近一年/近五年）                                                    | ❌ 500                              |
+| `stock_financial_us_report_em` / `stock_individual_basic_info_us_xq`                                                                         | ❌ 500                              |
+| `stock_us_min` / `stock_us_fund_flow_em` / `stock_us_zh_index_daily` / `stock_us_profile` / `stock_us_fundamental` / `stock_us_indicator_lg` | ❌ 404（未暴露）                    |
+
+⇒ 美股**无法计算 PE/PB/PS 历史分位**。业务层的处置：
+`app/lib/valuationRules.js` 的 `US_STOCK` 规则给 PE/PB/PS 标记 `absolute: true`，
+在分位缺失时回退到 `valuationEngine.js` 的绝对阈值评分（`peToScore` / `pbToScore` / `psToScore`）；
+若将来出现可用历史源，分位会自动优先生效（`absolute` 仅在分位为 null 时兜底）。
+
+未采用「价格 × EPS 反推估值历史」：美股拆股频繁，且回购使部分公司股东权益为负
+（实测 AAPL `ROE_AVG` 171%、NVDA 101%），反推结果失真风险高。
 
 ## stock_value_em 全量调用降本
 
@@ -99,13 +185,16 @@ app/providers/topk/
 NEXT_PUBLIC_TOPK_BASE_URL=https://your-aktools-host/api/public
 ```
 
-未设置时使用 `http://topk.xyz/api/public`（占位默认值，生产前必须替换）。
+未设置时使用 `http://100.68.218.28:18081/api/public`（自建 AKTools 实例默认值）。
 
 ## 运行测试
 
 ```
-node --test app/providers/topk/__tests__/
+node --test app/providers/topk/__tests__/*.test.js
 ```
+
+注：Node 25 下 `node --test <目录>` 会把目录当作模块解析并报 `MODULE_NOT_FOUND`，
+需显式传文件或以 glob 展开。
 
 ## 设计原则
 

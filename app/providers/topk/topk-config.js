@@ -11,7 +11,7 @@
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * 默认 baseUrl：https://topk.xyz/api/public
+ * 默认 baseUrl：http://100.68.218.28:18081/api/public（自建 AKTools 实例）
  *
  * 注意：
  * - http://topk.xyz 是无关的 LNMP 演示页面，所有路径返回 nginx 404，必须用 https
@@ -34,11 +34,24 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
  * - 真实联调结果（2026-09-19，港股持仓穿透）：
  *     stock_hk_financial_indicator_em: 200, ~0.7KB, ~0.15s（含股东权益回报率/市盈率/市净率/股息率TTM）
  *     stock_hk_spot_em: 500（TopK/AKShare 端异常）
- * - 真实联调结果（2026-09-20，港股历史估值源选型）：
- *     stock_hk_indicator_eniu: 200, ~140~190KB, 6~18s（已采用；数据止于 2022-07-13，见下方说明）
- *     stock_hk_valuation_baidu: 200, ~30KB, ~0.1s（数据到当日，但仅 2004 起 ~626 行、密度低；未采用）
+ * - 真实联调结果（2026-09-20，港股历史估值源选型；2026-09-26 复测后改选）：
+ *     stock_hk_indicator_eniu: 200, ~140~190KB, 6~18s（数据止于 2022-07-13，已弃用）
+ *     stock_hk_valuation_baidu: 200, ~17~45KB, 数据到当日（已采用，见 TOPK_HK_VALUATION_INDICATORS）
+ *       ⚠️ indicator 必须精确：「市盈率」→500，只有「市盈率(TTM)」可用；「市销率」→500（无港股 PS）
+ * - 真实联调结果（2026-09-26，美股持仓穿透选型）：
+ *     可用：stock_financial_us_analysis_indicator_em 200, 7~38KB, ~0.5s（含 ROE_AVG / 净利同比 / 营收同比 / 毛利率）
+ *           stock_us_daily 200, ~1.1MB（仅 OHLCV 价格，无估值比率）
+ *           index_us_stock_sina 200, ~1.2MB
+ *     上游报错（500，接口存在但不可用，禁止接入）：
+ *           stock_us_spot_em / stock_us_famous_spot_em / stock_us_hist / stock_us_hist_min_em
+ *           stock_us_valuation_baidu（市盈率(TTM)/市净率/市销率/市盈率(静)/总市值 × 近一年/近五年 全部 500）
+ *           stock_financial_us_report_em / stock_individual_basic_info_us_xq
+ *     未暴露（404）：stock_us_min / stock_us_fund_flow_em / stock_us_zh_index_daily
+ *           stock_us_profile / stock_us_fundamental / stock_us_indicator_lg
+ *     ⇒ 结论：美股只有「当前估值倍数（东财 push2，105./106. secid）」+「TopK 财务指标」，
+ *       不存在可用的美股估值历史序列，故美股 PE/PB/PS 历史分位无法计算（详见 README）。
  */
-export const TOPK_DEFAULT_BASE_URL = 'https://topk.xyz/api/public';
+export const TOPK_DEFAULT_BASE_URL = 'http://100.68.218.28:18081/api/public';
 
 export const TOPK_BASE_URL = (() => {
   if (typeof process !== 'undefined' && process?.env?.NEXT_PUBLIC_TOPK_BASE_URL) {
@@ -82,26 +95,38 @@ export const TOPK_ENDPOINTS = Object.freeze({
   getStockRoe: 'stock_financial_analysis_indicator',
   // 港股个股财务指标（用于持仓穿透 ROE）：AKShare stock_hk_financial_indicator_em，返回单行快照
   getStockHkFinancial: 'stock_hk_financial_indicator_em',
-  // 港股个股估值历史（用于持仓穿透历史分位）：AKShare stock_hk_indicator_eniu，单指标序列
-  getStockHkValueHistory: 'stock_hk_indicator_eniu',
+  // 港股个股估值历史（用于持仓穿透历史分位 + 近 1/3 月走势）：AKShare stock_hk_valuation_baidu
+  getStockHkValueHistory: 'stock_hk_valuation_baidu',
+  // 美股个股财务指标（用于持仓穿透 ROE/盈利增速/营收增速）：AKShare stock_financial_us_analysis_indicator_em
+  // 注意：该接口只接受 symbol，附加 indicator/period 等参数会返回 500
+  getStockUsFinancial: 'stock_financial_us_analysis_indicator_em',
   healthCheck: 'fund_open_fund_daily_em'
 });
 
 /**
- * 港股估值历史（stock_hk_indicator_eniu，亿牛网）支持的指标映射：领域字段名 → 亿牛网 indicator 参数。
+ * 港股估值历史（stock_hk_valuation_baidu，百度股市通）支持的指标映射：
+ * 领域字段名 → 百度 indicator 参数。
  *
- * ⚠️ 数据新鲜度（已知限制）：亿牛网已下线港股个股页面（eniu.com/gu/hk00700 返回「未收录此股票」），
- * AKShare 只能返回存档数据 —— 实测所有港股标的最后日期均为 2022-07-13。
- * 配合「近 5 年」分位窗口，港股 PE/PB 分位实际基于 2021-09 ~ 2022-07 的区间，存在系统性偏差。
- * 若要新鲜数据应改用 stock_hk_valuation_baidu（数据到当日，但缺日频密度）。
+ * ⚠️ 指标名必须精确匹配，实测「市盈率」返回 500，只有「市盈率(TTM)」可用。
+ *「市销率」上游 500，故未纳入（港股无 psPercentile）。
  *
- * 实测（2026-09-20）：市盈率 / 市净率 返回 200；单只 ~140KB~190KB / 6~18s（较慢）。
- * 市销率 返回的字段是 market_value（市值）而非 PS 比率，不可用于 psPercentile，故未纳入。
+ * 选型说明（2026-09-26 重新联调后由 eniu 切换为本源）：
+ *   - eniu（stock_hk_indicator_eniu）：亿牛网已下线港股个股页，数据止于 2022-07-13。
+ *     用它算「近 5 年分位」实际是拿 2021-09 ~ 2022-07 的区间与今天的值比较，存在系统性偏差。
+ *   - baidu：数据到当日（实测最后一点 2026-09-26），近五年 PE 914 行 / PB 约 900 行，
+ *     近 3 个月约 45 个点，既够算分位也够画区间走势。
+ *   - 因此本源同时服务「当前分位」与「近 1 月/近 3 月估值走势」。
  */
 export const TOPK_HK_VALUATION_INDICATORS = Object.freeze({
-  pe: '市盈率',
+  pe: '市盈率(TTM)',
   pb: '市净率'
 });
+
+/**
+ * 港股估值历史取数区间。
+ * 「近五年」既覆盖分位所需的 5 年窗口，其尾部又提供近 1~3 月的走势点，单次请求满足两个用途。
+ */
+export const TOPK_HK_VALUATION_PERIOD = '近五年';
 
 /**
  * 缓存 TTL：与项目内现有查询粒度对齐。
@@ -127,6 +152,8 @@ export const TOPK_CACHE_TTL = Object.freeze({
   // 港股财务指标（季度披露）与估值历史（日频，但仅用于分位统计）同样按天缓存
   getStockHkFinancial: ONE_DAY_MS,
   getStockHkValueHistory: ONE_DAY_MS,
+  // 美股财务指标（季度/年度披露，单次 7~38KB）按天缓存
+  getStockUsFinancial: ONE_DAY_MS,
   healthCheck: 5 * 60 * 1000
 });
 

@@ -342,7 +342,8 @@ export default function SettingsModal({
             </div>
             <div className="muted" style={{ marginBottom: 12, fontSize: '0.75rem', lineHeight: 1.5 }}>
               开启后，基金持仓穿透估值的 A 股单股指标（PE/PB/PS/PEG/市值）将改由 TopK / AKTools （AKShare
-              stock_value_em）提供；港美股仍走原有通道。关闭时维持原行为。
+              stock_value_em）提供。港股与美股的估值倍数仍走东财通道；美股的 ROE / 盈利增速 / 营收增速固定由
+              TopK（stock_financial_us_analysis_indicator_em）提供，不受此开关影响。关闭时维持原行为。
             </div>
             <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
               <div className="muted" style={{ fontSize: '0.8rem' }}>

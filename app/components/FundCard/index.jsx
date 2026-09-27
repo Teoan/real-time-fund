@@ -958,7 +958,12 @@ export default function Index({
             </TabsContent>
           )}
           <TabsContent value="valuation" className="mt-3 outline-none">
-            <FundValuationPanel valuation={fundValuation} isLoading={fundValuationLoading} />
+            <FundValuationPanel
+              valuation={fundValuation}
+              isLoading={fundValuationLoading}
+              code={f.code}
+              historyDefaultExpanded={layoutMode === 'drawer'}
+            />
           </TabsContent>
           <TabsContent value="trend" className="mt-3 outline-none">
             <FundTrendChart
@@ -1007,7 +1012,12 @@ export default function Index({
             <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: 6, color: 'var(--foreground)' }}>
               估值分析
             </div>
-            <FundValuationPanel valuation={fundValuation} isLoading={fundValuationLoading} />
+            <FundValuationPanel
+              valuation={fundValuation}
+              isLoading={fundValuationLoading}
+              code={f.code}
+              historyDefaultExpanded={layoutMode === 'drawer'}
+            />
           </div>
 
           {hasHoldings && (
