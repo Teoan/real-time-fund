@@ -93,6 +93,7 @@ const NON_FROZEN_COLUMN_IDS = [
 /** 已保存列显示偏好时，新增列默认隐藏；未保存时随「全展示」 */
 const PC_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED = new Set([
   'dataSource',
+  'relatedSector',
   'holdingCost',
   'costNav',
   'sinceAddedChangePercent',

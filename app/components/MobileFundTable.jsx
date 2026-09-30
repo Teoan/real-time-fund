@@ -95,6 +95,7 @@ const MOBILE_NON_FROZEN_COLUMN_IDS = [
 const MOBILE_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED = new Set([
   'dataSource',
   'tags',
+  'relatedSector',
   'holdingCost',
   'costNav',
   'sinceAddedChangePercent',
