@@ -133,3 +133,6 @@ export const fundValuationHistory = (fundCode, range) => [
   String(fundCode || '').trim(),
   String(range || '')
 ];
+
+/** @param {string} fundCode - 基金波动信号缓存键（指标与信号本体走 IndexedDB，这里只缓存内存态） */
+export const fundVolatility = (fundCode) => ['fundVolatility', String(fundCode || '').trim()];

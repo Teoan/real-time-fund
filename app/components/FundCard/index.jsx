@@ -25,6 +25,7 @@ import { ChevronIcon, SettingsIcon, StarIcon, SwitchIcon, TrashIcon, LinkIcon } 
 import { getTagThemeBadgeProps } from '../AddTagDialog';
 import FundValuationBadge from '../FundValuationBadge';
 import FundValuationPanel from '../FundValuationPanel';
+import FundVolatilityPanel from '../FundVolatilityPanel';
 import { useFundValuation } from '@/app/hooks/useFundValuation';
 
 dayjs.extend(utc);
@@ -897,6 +898,7 @@ export default function Index({
           <TabsList className="w-full flex">
             {hasHoldings && <TabsTrigger value="holdings">前10重仓</TabsTrigger>}
             <TabsTrigger value="valuation">估值分析</TabsTrigger>
+            <TabsTrigger value="volatility">波动</TabsTrigger>
             <TabsTrigger value="trend">业绩走势</TabsTrigger>
             {showValuationTrend && <TabsTrigger value="valuation_trend">估值走势</TabsTrigger>}
             {hasHoldingAmount && <TabsTrigger value="earnings">我的收益</TabsTrigger>}
@@ -965,6 +967,9 @@ export default function Index({
               historyDefaultExpanded={layoutMode === 'drawer'}
             />
           </TabsContent>
+          <TabsContent value="volatility" className="mt-3 outline-none">
+            <FundVolatilityPanel code={f.code} name={f.name} defaultExpanded />
+          </TabsContent>
           <TabsContent value="trend" className="mt-3 outline-none">
             <FundTrendChart
               key={`${f.code}-${theme}`}
@@ -1018,6 +1023,11 @@ export default function Index({
               code={f.code}
               historyDefaultExpanded={layoutMode === 'drawer'}
             />
+          </div>
+
+          {/* ── 波动信号（card 模式，默认收起：展开才拉取净值历史） ── */}
+          <div style={{ marginBottom: 8 }}>
+            <FundVolatilityPanel code={f.code} name={f.name} />
           </div>
 
           {hasHoldings && (
