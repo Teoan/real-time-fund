@@ -8,6 +8,10 @@
  *   fundRisk    基金风险指标
  *   fundSignal  基金波动信号
  *
+ * ⚠️ 第 5 个仓库 fundBenchmark（业绩基准指数日线）刻意**不归这里管**：
+ *     它按 secid 跨基金共享、且是 fundMetrics 的输入而非波动信号的输入，
+ *     因此 clearFund 也不清它（清了会连带影响所有用同一基准的基金）。
+ *
  * 三个约定：
  *
  *   1. **版本号强制失效**：每条记录写成 `{ _v, ts, data }`。
@@ -82,8 +86,13 @@ const defaultAdapter = {
   clear: idbClearStore
 };
 
-/** 读一条带版本号的记录；版本不符或结构非法时删除并返回 null */
-const readVersioned = async (adapter, store, key, version) => {
+/**
+ * 读一条带版本号的记录；版本不符或结构非法时删除并返回 null。
+ *
+ * 导出给 app/lib/fundBenchmarkCache.js 复用：基准序列缓存需要完全相同的
+ * 「版本不符即删除」语义，复制一份会让两处将来各自漂移。
+ */
+export const readVersionedRecord = async (adapter, store, key, version) => {
   const raw = await adapter.get(store, key);
   if (!isObject(raw) || raw._v !== version || !isObject(raw.data)) {
     if (raw != null) await adapter.delete(store, key);
@@ -92,8 +101,8 @@ const readVersioned = async (adapter, store, key, version) => {
   return { ts: isNumber(raw.ts) ? raw.ts : 0, data: raw.data };
 };
 
-/** 写一条带版本号的记录 */
-const writeVersioned = (adapter, store, key, version, data, now) =>
+/** 写一条带版本号的记录（同 readVersionedRecord，导出供基准序列缓存复用） */
+export const writeVersionedRecord = (adapter, store, key, version, data, now) =>
   adapter.set(store, key, { _v: version, ts: now, data });
 
 /**
@@ -106,7 +115,7 @@ export const createFundVolatilityCache = (adapter = defaultAdapter, now = () => 
   const readNav = async (code) => {
     const key = String(code || '').trim();
     if (!key) return null;
-    const entry = await readVersioned(adapter, IDB_STORES.NAV, key, NAV_CACHE_VERSION);
+    const entry = await readVersionedRecord(adapter, IDB_STORES.NAV, key, NAV_CACHE_VERSION);
     if (!entry || !isArray(entry.data.rows)) return null;
     const rows = normalizeNavSeries(entry.data.rows);
     if (rows.length === 0) return null;
@@ -119,7 +128,7 @@ export const createFundVolatilityCache = (adapter = defaultAdapter, now = () => 
     if (!key) return false;
     const trimmed = trimNavSeries(normalizeNavSeries(rows), NAV_RETENTION_DAYS);
     if (trimmed.length === 0) return false;
-    return writeVersioned(
+    return writeVersionedRecord(
       adapter,
       IDB_STORES.NAV,
       key,
@@ -137,7 +146,7 @@ export const createFundVolatilityCache = (adapter = defaultAdapter, now = () => 
   const readMetrics = async (code, fingerprint) => {
     const key = String(code || '').trim();
     if (!key || !isObject(fingerprint)) return null;
-    const entry = await readVersioned(adapter, IDB_STORES.RISK, key, METRICS_CACHE_VERSION);
+    const entry = await readVersionedRecord(adapter, IDB_STORES.RISK, key, METRICS_CACHE_VERSION);
     if (!entry) return null;
     if (entry.data.asOfDate !== fingerprint.asOfDate || entry.data.navCount !== fingerprint.navCount) return null;
     if (!isObject(entry.data.metrics)) return null;
@@ -148,7 +157,7 @@ export const createFundVolatilityCache = (adapter = defaultAdapter, now = () => 
   const writeMetrics = async (code, metrics) => {
     const key = String(code || '').trim();
     if (!key || !isObject(metrics)) return false;
-    return writeVersioned(
+    return writeVersionedRecord(
       adapter,
       IDB_STORES.RISK,
       key,
@@ -166,7 +175,7 @@ export const createFundVolatilityCache = (adapter = defaultAdapter, now = () => 
   const readSignal = async (code, fingerprint) => {
     const key = String(code || '').trim();
     if (!key || !isObject(fingerprint)) return null;
-    const entry = await readVersioned(adapter, IDB_STORES.SIGNAL, key, SIGNAL_CACHE_VERSION);
+    const entry = await readVersionedRecord(adapter, IDB_STORES.SIGNAL, key, SIGNAL_CACHE_VERSION);
     if (!entry) return null;
     if (entry.data.asOfDate !== fingerprint.asOfDate || entry.data.navCount !== fingerprint.navCount) return null;
     if (!isString(entry.data.state)) return null;
@@ -178,7 +187,7 @@ export const createFundVolatilityCache = (adapter = defaultAdapter, now = () => 
     const key = String(code || '').trim();
     if (!key || !isObject(analysis)) return false;
     const { asOfDate, navCount, state, stateLevel, signals, primarySignals, riskScore } = analysis;
-    return writeVersioned(
+    return writeVersionedRecord(
       adapter,
       IDB_STORES.SIGNAL,
       key,
@@ -192,7 +201,7 @@ export const createFundVolatilityCache = (adapter = defaultAdapter, now = () => 
   const readBasic = async (code) => {
     const key = String(code || '').trim();
     if (!key) return null;
-    const entry = await readVersioned(adapter, IDB_STORES.BASIC, key, BASIC_CACHE_VERSION);
+    const entry = await readVersionedRecord(adapter, IDB_STORES.BASIC, key, BASIC_CACHE_VERSION);
     return entry ? { ts: entry.ts, data: entry.data } : null;
   };
 
@@ -200,7 +209,7 @@ export const createFundVolatilityCache = (adapter = defaultAdapter, now = () => 
   const writeBasic = async (code, info) => {
     const key = String(code || '').trim();
     if (!key || !isObject(info)) return false;
-    return writeVersioned(adapter, IDB_STORES.BASIC, key, BASIC_CACHE_VERSION, info, now());
+    return writeVersionedRecord(adapter, IDB_STORES.BASIC, key, BASIC_CACHE_VERSION, info, now());
   };
 
   /** 清空某只基金的全部缓存（4 个仓库） */

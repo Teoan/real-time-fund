@@ -56,36 +56,23 @@ const buildInsufficientResult = (code, { error = null, navCount = 0, asOfDate = 
 });
 
 /**
- * 加载某只基金的波动画像。
+ * 加载某只基金的历史净值序列（本地缓存 → 必要时补最新 → 回写）。
  *
- * @param {string} code 6 位基金代码
+ * 这是「净值取数」的唯一实现，被波动画像（loadFundVolatility）与
+ * 基金指标（app/lib/fundMetricsService.js）共用：
+ *   两个功能读的是同一份 fundNav 缓存，各写一份会立刻出现两套新鲜度判断，
+ *   而下面「静默空数组」「写缓存失败」两条细节都有回归护栏，不能复制。
+ *
+ * @param {string} fundCode 已 trim 的基金代码
  * @param {object} options
- * @param {(code: string) => Promise<Array<object>>} options.fetchHistory
- *        拉取历史净值的函数（返回 app/api/fund.js fetchFundHistory 的结构，或 `{ rows }`）
- * @param {object} [options.cache] 缓存访问器，默认 fundVolatilityCache
- * @param {number} [options.ttl] 净值缓存新鲜期
- * @param {boolean} [options.forceRefresh] 忽略净值新鲜期，强制重取
- * @param {object|null} [options.basic] 基金基本信息（名称/类型等），提供时写入 fundBasic
- * @param {() => number} [options.now] 取时间戳（测试可注入）
- * @returns {Promise<object>} 可直接渲染的波动画像
+ * @param {(code: string) => Promise<Array<object>>} options.fetchHistory 拉取历史净值
+ * @param {object} options.cache 缓存访问器
+ * @param {number} options.ttl 净值缓存新鲜期
+ * @param {boolean} options.forceRefresh 忽略新鲜期强制重取
+ * @param {() => number} options.now 取时间戳
+ * @returns {Promise<{ rows: Array<object>, navFromCache: boolean, fetchError: string|null }>}
  */
-export const loadFundVolatility = async (code, options = {}) => {
-  const fundCode = code != null ? String(code).trim() : '';
-  if (!fundCode) return buildInsufficientResult('', { error: '缺少基金代码' });
-
-  const {
-    fetchHistory,
-    cache = fundVolatilityCache,
-    ttl = NAV_CACHE_TTL_MS,
-    forceRefresh = false,
-    basic = null,
-    now = () => Date.now()
-  } = options;
-
-  if (!isFunction(fetchHistory)) {
-    return buildInsufficientResult(fundCode, { error: '未提供历史净值取数函数' });
-  }
-
+export const loadNavSeriesWithCache = async (fundCode, { fetchHistory, cache, ttl, forceRefresh = false, now }) => {
   let fetchError = null;
   let navFromCache = false;
   let cachedNav = null;
@@ -124,7 +111,7 @@ export const loadFundVolatility = async (code, options = {}) => {
     } else {
       // 没有补到任何新数据（取数抛错、或上游静默返回空数组）
       if (rows.length === 0) {
-        return buildInsufficientResult(fundCode, { error: fetchError });
+        return { rows, navFromCache: false, fetchError };
       }
       // 用的是本地历史 → 来源要如实标成 cache，并留一条提示，
       // 否则用户点「刷新」后会以为已经拿到最新净值
@@ -134,6 +121,48 @@ export const loadFundVolatility = async (code, options = {}) => {
   } else {
     navFromCache = true;
   }
+
+  return { rows, navFromCache, fetchError };
+};
+
+/**
+ * 加载某只基金的波动画像。
+ *
+ * @param {string} code 6 位基金代码
+ * @param {object} options
+ * @param {(code: string) => Promise<Array<object>>} options.fetchHistory
+ *        拉取历史净值的函数（返回 app/api/fund.js fetchFundHistory 的结构，或 `{ rows }`）
+ * @param {object} [options.cache] 缓存访问器，默认 fundVolatilityCache
+ * @param {number} [options.ttl] 净值缓存新鲜期
+ * @param {boolean} [options.forceRefresh] 忽略净值新鲜期，强制重取
+ * @param {object|null} [options.basic] 基金基本信息（名称/类型等），提供时写入 fundBasic
+ * @param {() => number} [options.now] 取时间戳（测试可注入）
+ * @returns {Promise<object>} 可直接渲染的波动画像
+ */
+export const loadFundVolatility = async (code, options = {}) => {
+  const fundCode = code != null ? String(code).trim() : '';
+  if (!fundCode) return buildInsufficientResult('', { error: '缺少基金代码' });
+
+  const {
+    fetchHistory,
+    cache = fundVolatilityCache,
+    ttl = NAV_CACHE_TTL_MS,
+    forceRefresh = false,
+    basic = null,
+    now = () => Date.now()
+  } = options;
+
+  if (!isFunction(fetchHistory)) {
+    return buildInsufficientResult(fundCode, { error: '未提供历史净值取数函数' });
+  }
+
+  const { rows, navFromCache, fetchError } = await loadNavSeriesWithCache(fundCode, {
+    fetchHistory,
+    cache,
+    ttl,
+    forceRefresh,
+    now
+  });
 
   if (rows.length === 0) {
     // fetchFundHistory 失败时是静默返回 []，不会带出原因，这里补一句可展示的说明，

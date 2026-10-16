@@ -26,6 +26,7 @@ import { getTagThemeBadgeProps } from '../AddTagDialog';
 import FundValuationBadge from '../FundValuationBadge';
 import FundValuationPanel from '../FundValuationPanel';
 import FundVolatilityPanel from '../FundVolatilityPanel';
+import FundMetricsPanel from '../FundMetricsPanel';
 import { useFundValuation } from '@/app/hooks/useFundValuation';
 
 dayjs.extend(utc);
@@ -895,10 +896,12 @@ export default function Index({
 
       {layoutMode === 'drawer' ? (
         <Tabs defaultValue={hasHoldings ? 'holdings' : 'trend'} className="w-full">
-          <TabsList className="w-full flex">
+          {/* overflow-x-auto：详情里最多 7 个页签，窄屏放不下时横向滚动而不是把标签挤变形 */}
+          <TabsList className="w-full flex overflow-x-auto no-scrollbar">
             {hasHoldings && <TabsTrigger value="holdings">前10重仓</TabsTrigger>}
             <TabsTrigger value="valuation">估值分析</TabsTrigger>
             <TabsTrigger value="volatility">波动</TabsTrigger>
+            <TabsTrigger value="metrics">指标</TabsTrigger>
             <TabsTrigger value="trend">业绩走势</TabsTrigger>
             {showValuationTrend && <TabsTrigger value="valuation_trend">估值走势</TabsTrigger>}
             {hasHoldingAmount && <TabsTrigger value="earnings">我的收益</TabsTrigger>}
@@ -969,6 +972,10 @@ export default function Index({
           </TabsContent>
           <TabsContent value="volatility" className="mt-3 outline-none">
             <FundVolatilityPanel code={f.code} name={f.name} defaultExpanded />
+          </TabsContent>
+          {/* 指标：Radix 只在激活时挂载，所以切到这个页签之前不会取数 */}
+          <TabsContent value="metrics" className="mt-3 outline-none">
+            <FundMetricsPanel code={f.code} name={f.name} />
           </TabsContent>
           <TabsContent value="trend" className="mt-3 outline-none">
             <FundTrendChart

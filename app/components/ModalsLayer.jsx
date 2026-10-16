@@ -23,6 +23,8 @@ const ScanProgressModal = dynamic(() => import('./ScanProgressModal'), { ssr: fa
 const AddHistoryModal = dynamic(() => import('./AddHistoryModal'), { ssr: false });
 const AllSectorsModal = dynamic(() => import('./AllSectorsModal'), { ssr: false });
 const DividendMethodModal = dynamic(() => import('./DividendMethodModal'), { ssr: false });
+// 调研初步报告：低频、纯展示（报告在点击入口时已算好），懒加载
+const FundResearchReportModal = dynamic(() => import('./FundResearchReportModal'), { ssr: false });
 
 // 高频组件：同步加载
 import ConfirmModal from './ConfirmModal';
@@ -105,6 +107,7 @@ function ModalsLayerContent({ callbacksRef }) {
   const selectFundSingleModal = useModalStore((s) => s.selectFundSingleModal);
   const selectHoldingGroupModal = useModalStore((s) => s.selectHoldingGroupModal);
   const dataSourceModal = useModalStore((s) => s.dataSourceModal);
+  const fundReportModal = useModalStore((s) => s.fundReportModal);
   const dcaModal = useModalStore((s) => s.dcaModal);
   const clearConfirm = useModalStore((s) => s.clearConfirm);
   const holdingMigrateDialog = useModalStore((s) => s.holdingMigrateDialog);
@@ -161,6 +164,7 @@ function ModalsLayerContent({ callbacksRef }) {
   const setSelectHoldingGroupModal = (v) =>
     _ms({ selectHoldingGroupModal: isFunction(v) ? v(_gs().selectHoldingGroupModal) : v });
   const setDataSourceModal = (v) => _ms({ dataSourceModal: isFunction(v) ? v(_gs().dataSourceModal) : v });
+  const setFundReportModal = (v) => _ms({ fundReportModal: isFunction(v) ? v(_gs().fundReportModal) : v });
   const setDcaModal = (v) => _ms({ dcaModal: isFunction(v) ? v(_gs().dcaModal) : v });
   const setClearConfirm = (v) => _ms({ clearConfirm: isFunction(v) ? v(_gs().clearConfirm) : v });
   const setHoldingMigrateDialog = (v) =>
@@ -599,6 +603,16 @@ function ModalsLayerContent({ callbacksRef }) {
             groupId={dividendMethodModal.groupId}
             onClose={() => setDividendMethodModal({ open: false, fund: null })}
             showToast={cb.current.showToast}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* ===== Modal: 调研初步报告 ===== */}
+      <AnimatePresence>
+        {fundReportModal.open && fundReportModal.report && (
+          <FundResearchReportModal
+            report={fundReportModal.report}
+            onClose={() => setFundReportModal({ open: false, report: null })}
           />
         )}
       </AnimatePresence>

@@ -9,7 +9,13 @@
 ```
 app/components/
 ├── Core Display (6)
-│   ├── FundCard.jsx            # Individual fund card (valuation + holdings)
+│   ├── FundCard/index.jsx      # Individual fund card. `layoutMode='drawer'` renders the 基金详情
+│   │                           #   dialog/drawer tabs: 前10重仓 / 估值分析 / 波动 / 指标 /
+│   │                           #   业绩走势 / 估值走势 / 我的收益  (tab strip is overflow-x-auto)
+│   ├── FundVolatilityPanel.jsx # 波动信号 panel (self-fetching; collapsed by default in card mode)
+│   ├── FundMetricsPanel.jsx    # 指标 panel — 13 risk/return indicators; only mounted in the 指标 tab
+│   │                           #   hosts the 调研初步报告 entry button (opens FundResearchReportModal)
+│   ├── FundResearchReportModal.jsx # 调研初步报告 dialog — renders app/lib/fundReport.js output + copy Markdown
 │   ├── PcFundTable.jsx         # Desktop table layout
 │   ├── MobileFundTable.jsx     # Mobile list with swipe actions
 │   ├── MobileFundCardDrawer.jsx# Mobile fund detail drawer
@@ -21,7 +27,8 @@ app/components/
 │   ├── Settings: SettingsModal, MarketSettingModal, MobileSettingModal, PcTableSettingModal, SortSettingModal
 │   ├── Auth: LoginModal, CloudConfigModal
 │   ├── Scan: ScanPickModal, ScanProgressModal, ScanImportConfirmModal, ScanImportProgressModal
-│   └── Misc: ConfirmModal, SuccessModal, DonateModal, FeedbackModal, WeChatModal, UpdatePromptModal, FundHistoryNetValueModal
+│   └── Misc: ConfirmModal, SuccessModal, DonateModal, FeedbackModal, WeChatModal, UpdatePromptModal, FundHistoryNetValueModal,
+│             FundResearchReportModal (low-frequency → dynamic import, state in modalStore.fundReportModal)
 ├── Charts (3)
 │   ├── FundIntradayChart.jsx   # Intraday valuation chart (localStorage data)
 │   ├── FundTrendChart.jsx      # Fund trend chart (pingzhongdata)
@@ -47,6 +54,8 @@ app/components/
 - **Modals**: use `useBodyScrollLock(open)` hook for scroll prevention
 - **Icons**: mix of custom SVG (Icons.jsx) + lucide-react
 - **Styling**: glassmorphism via CSS variables (globals.css), no component-level CSS
+- **Nested dialog over 基金详情**: when adding a dialog opened *from inside* the fund detail, register its `modalStore` key in `isAnySubModalOpen` (PcFundTable / MarketTab `FundDetailDialog`) so the detail dialog isn't closed along with it; the mobile drawer already ignores pointer-down on `[data-slot="dialog-content"], [data-slot="dialog-overlay"]`
+- **Self-fetching enhancement panels**: `FundVolatilityPanel` / `FundMetricsPanel` / `FundValuationHistory` call their own hook (`useFundVolatility` / `useFundMetrics`) instead of receiving data through page.jsx props. Analytics panels inside FundCard drawer tabs need no `enabled` flag — Radix unmounts inactive `TabsContent`, so data loads only when the tab is opened
 
 ## ANTI-PATTERNS (THIS DIRECTORY)
 

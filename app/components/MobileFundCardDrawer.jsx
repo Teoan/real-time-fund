@@ -47,7 +47,10 @@ export default function MobileFundCardDrawer({
             e.preventDefault();
             return;
           }
-          if (e?.target?.closest?.('[data-slot="dialog-content"], [role="dialog"]')) {
+          // 点到「详情内部打开的 dialog」时忽略本次关闭：
+          // dialog-content 是点进内容，dialog-overlay 是点在它的遮罩上（例如调研初步报告弹框的遮罩），
+          // 两种都应只关掉上层 dialog，而不是把基金详情 Drawer 一起带走。
+          if (e?.target?.closest?.('[data-slot="dialog-content"], [data-slot="dialog-overlay"], [role="dialog"]')) {
             if (ignoreNextDrawerCloseRef) ignoreNextDrawerCloseRef.current = true;
             return;
           }

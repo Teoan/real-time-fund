@@ -136,3 +136,9 @@ export const fundValuationHistory = (fundCode, range) => [
 
 /** @param {string} fundCode - 基金波动信号缓存键（指标与信号本体走 IndexedDB，这里只缓存内存态） */
 export const fundVolatility = (fundCode) => ['fundVolatility', String(fundCode || '').trim()];
+
+/** @param {string} fundCode - 基金指标（13 项风险收益指标）缓存键；指标本体现算，这里只缓存内存态 */
+export const fundMetrics = (fundCode) => ['fundMetrics', String(fundCode || '').trim()];
+
+/** @param {string} secid - 业绩基准指数日线缓存键（东财 push2his kline，如 '1.000300'） */
+export const indexKline = (secid) => ['indexKline', String(secid || '').trim()];

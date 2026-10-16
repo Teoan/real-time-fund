@@ -3332,7 +3332,9 @@ function FundDetailDialog({ blockDialogClose, cardDialogRow, getFundCardProps, s
       s.historyModal.open ||
       s.actionModal.open ||
       s.selectHoldingGroupModal.open ||
-      s.addHistoryModal.open
+      s.addHistoryModal.open ||
+      // 调研初步报告从「基金详情」内部打开，必须计入，否则点它会把详情弹框一起关掉
+      s.fundReportModal.open
   );
 
   const finalBlockClose = blockDialogClose || isAnySubModalOpen;

@@ -2023,6 +2023,116 @@ export const fetchMarketIndices = async () => {
   return fetchTencentIndices;
 };
 
+/**
+ * 业绩基准指数日线的单次请求根数上限。
+ * ≈5.5 年交易日，覆盖净值缓存保留窗口（NAV_RETENTION_DAYS ≈1285），再多就是白流量。
+ */
+const INDEX_KLINE_LIMIT = 1400;
+const INDEX_KLINE_TIMEOUT_MS = 10000;
+
+/** klines 行 `"YYYY-MM-DD,close"` → `{ date, close }`；脏行直接丢弃 */
+const parseIndexKlineRows = (klines) => {
+  if (!isArray(klines)) return [];
+  const out = [];
+  for (const line of klines) {
+    if (!isString(line)) continue;
+    const [date, closeRaw] = line.split(',');
+    const close = Number(closeRaw);
+    const day = isString(date) ? date.trim() : '';
+    if (!day || !Number.isFinite(close) || close <= 0) continue;
+    out.push({ date: day, close });
+  }
+  return out;
+};
+
+/**
+ * 获取业绩基准指数的日线收盘序列（供 app/lib/fundMetrics.js 计算 Beta / Alpha / 信息比率）。
+ *
+ * 数据源：东方财富 push2his kline（JSONP，script 注入 + 具名回调，规避跨域）。
+ *   secid 形如 '1.000300'（1=沪 / 0=深 / 100=境外指数：100.SPX、100.HSI）。
+ *   实测 1.000300 / 1.000905 / 0.399006 / 100.SPX / 100.HSI 均可用，返回 2005 年至今全量；
+ *   中证全债（H11001）等债券指数返回 rc:100 无数据，故债券型基金不配基准
+ *   （见 app/lib/fundBenchmark.js）。
+ *
+ * 失败一律返回 null 而**不抛**：基准只是指标的一部分，取不到时应当只让
+ * Alpha/Beta/信息比率变成 '--'，而不是把整个指标面板打成错误。
+ * 失败结果不留在 React Query 缓存里（removeQueries），以便下次进入页签能重试。
+ *
+ * @param {string} secid 例如 '1.000300'
+ * @param {{ cacheTime?: number }} [options]
+ * @returns {Promise<{ secid: string, name: string, rows: Array<{date: string, close: number}> }|null>}
+ */
+export const fetchIndexKlineHistory = async (secid, { cacheTime = ONE_DAY_MS } = {}) => {
+  if (typeof window === 'undefined' || typeof document === 'undefined' || !document.body) return null;
+  const key = isString(secid) ? secid.trim() : '';
+  if (!key) return null;
+
+  const qc = getQueryClient();
+  const queryKey = qk.indexKline(key);
+
+  const load = () =>
+    new Promise((resolve) => {
+      const callbackName = `__rtfIdx_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+      const url =
+        `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${encodeURIComponent(key)}` +
+        `&fields1=${encodeURIComponent('f1,f2,f3')}` +
+        `&fields2=${encodeURIComponent('f51,f53')}` +
+        `&klt=101&fqt=1&beg=0&end=20500101&lmt=${INDEX_KLINE_LIMIT}` +
+        `&cb=${callbackName}`;
+
+      const script = document.createElement('script');
+      script.src = url;
+      script.async = true;
+
+      let done = false;
+      const cleanup = () => {
+        done = true;
+        if (timer) clearTimeout(timer);
+        try {
+          delete window[callbackName];
+        } catch (e) {}
+        if (document.body.contains(script)) document.body.removeChild(script);
+      };
+
+      const timer = setTimeout(() => {
+        if (done) return;
+        cleanup();
+        resolve(null);
+      }, INDEX_KLINE_TIMEOUT_MS);
+
+      window[callbackName] = (payload) => {
+        if (done) return;
+        const rows = parseIndexKlineRows(payload?.data?.klines);
+        cleanup();
+        if (rows.length === 0) {
+          resolve(null);
+          return;
+        }
+        resolve({ secid: key, name: isString(payload?.data?.name) ? payload.data.name : '', rows });
+      };
+
+      script.onerror = () => {
+        if (done) return;
+        cleanup();
+        resolve(null);
+      };
+
+      document.body.appendChild(script);
+    });
+
+  try {
+    const result = await qc.fetchQuery({ queryKey, queryFn: load, staleTime: cacheTime });
+    if (!result) {
+      qc.removeQueries({ queryKey });
+      return null;
+    }
+    return result;
+  } catch (e) {
+    qc.removeQueries({ queryKey });
+    return null;
+  }
+};
+
 export const fetchLatestRelease = async () => {
   const url = process.env.NEXT_PUBLIC_GITHUB_LATEST_RELEASE_URL;
   if (!url) return null;

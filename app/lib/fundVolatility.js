@@ -348,7 +348,7 @@ export const trimNavSeries = (rows, limit) => {
  * @param {Array<{ dailyReturn: number|null }>} series 升序序列
  * @returns {number[]} 复权指数（升序，首元素为 1）
  */
-const buildAdjustedIndex = (series) => {
+export const buildAdjustedIndex = (series) => {
   const out = [1];
   let index = 1;
   for (const row of series) {
@@ -361,8 +361,13 @@ const buildAdjustedIndex = (series) => {
   return out;
 };
 
-/** 取日收益率数值序列（升序）。缺口产生的 null 会被剔除。 */
-const returnSeriesOf = (series) => series.map((r) => r.dailyReturn).filter(isFiniteNumber);
+/**
+ * 取日收益率数值序列（升序）。缺口产生的 null 会被剔除。
+ *
+ * 导出给 app/lib/fundMetrics.js 复用：收益率口径（含「累计净值绝对额之差 ÷ 前一日单位净值」
+ * 的还原规则）必须与波动信号完全一致，否则同一只基金在两个页签会看到不同的波动率。
+ */
+export const returnSeriesOf = (series) => series.map((r) => r.dailyReturn).filter(isFiniteNumber);
 
 /**
  * 样本标准差年化。

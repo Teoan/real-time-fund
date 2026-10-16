@@ -3,8 +3,12 @@
  *
  * 为什么不用 idb-keyval：它只是 tesseract.js 的传递依赖，没有写进 package.json
  * （见 package-lock.json 中 idb-keyval 挂在 tesseract.js 之下），直接 import 属于隐性依赖，
- * 一旦上游换实现就会静默失效。本项目只需要「4 个对象仓库 + 按基金代码读写」，
+ * 一旦上游换实现就会静默失效。本项目只需要「几个对象仓库 + 按代码读写」，
  * 自己封一层不到 100 行，且能精确控制降级行为。
+ *
+ * ⚠️ DB 名保留 'fundVolatility'（v1 时定的）：改名会让既有净值缓存整库失效、
+ *    所有基金重新拉一遍 pingzhongdata。v1 → v2 只是在同一库里补建基准序列仓库，
+ *    既有 4 个仓库的数据原样保留（见 onupgradeneeded 的「只补建缺失仓库」写法）。
  *
  * 设计要点：
  *   1. **必须能在 SSR 下安全 import**：Next.js 静态导出仍然会做构建期求值，
@@ -18,10 +22,10 @@
 export const FUND_VOLATILITY_DB_NAME = 'fundVolatility';
 
 /** 数据库版本（新增对象仓库时必须 +1，并在 upgrade 里补建） */
-export const FUND_VOLATILITY_DB_VERSION = 1;
+export const FUND_VOLATILITY_DB_VERSION = 2;
 
 /**
- * 对象仓库：对应规格 §3 的四类缓存数据
+ * 对象仓库：对应规格 §3 的四类缓存数据 + 基金指标所需的业绩基准序列
  */
 export const IDB_STORES = Object.freeze({
   /** 基金基本信息 */
@@ -31,7 +35,13 @@ export const IDB_STORES = Object.freeze({
   /** 基金风险指标 */
   RISK: 'fundRisk',
   /** 基金波动信号 */
-  SIGNAL: 'fundSignal'
+  SIGNAL: 'fundSignal',
+  /**
+   * 业绩基准（指数）日线序列 —— 键是 **secid**（如 '1.000300'）而不是基金代码。
+   * 同一基准被多只基金共享（沪深300 一条数据服务几百只基金），按基金代码存会成倍放大存储。
+   * 因此它也**不**参与 fundVolatilityCache.clearFund 的按基金清理。
+   */
+  BENCHMARK: 'fundBenchmark'
 });
 
 const STORE_NAMES = Object.freeze(Object.values(IDB_STORES));
@@ -203,7 +213,7 @@ export const idbClearStore = async (storeName) => {
   return res.ok;
 };
 
-/** 清空全部 4 个仓库 */
+/** 清空全部对象仓库 */
 export const idbClearAll = async () => {
   const results = await Promise.all(STORE_NAMES.map((name) => idbClearStore(name)));
   return results.every(Boolean);

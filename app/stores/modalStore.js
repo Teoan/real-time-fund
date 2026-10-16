@@ -18,6 +18,12 @@ const DEFAULTS = {
   historyModal: { open: false, fundCode: null, groupId: undefined },
   addHistoryModal: { open: false, fundCode: null, groupId: undefined },
   fundTagsEdit: { open: false, code: null, name: '', tags: [] },
+  /**
+   * 调研初步报告弹框。
+   * report 由 FundMetricsPanel 在点击时用 app/lib/fundReport.js 现算（纯函数，无额外取数），
+   * 因此这里只存结果，不存「指标数据」——避免报告与指标两份状态各自漂移。
+   */
+  fundReportModal: { open: false, report: null },
   holdingMigrateDialog: { open: false, code: null, name: '', targetGroupId: null },
   cloudConfigModal: { open: false, userId: null, type: null, cloudData: null },
   deviceConflictModal: { open: false, message: '', userId: null, payload: null, isPartial: false },
@@ -53,6 +59,7 @@ const getClosedModalState = () => ({
   historyModal: { ...DEFAULTS.historyModal },
   addHistoryModal: { ...DEFAULTS.addHistoryModal },
   fundTagsEdit: { ...DEFAULTS.fundTagsEdit },
+  fundReportModal: { ...DEFAULTS.fundReportModal },
   clearConfirm: null,
   fundDeleteConfirm: null,
   fundDeleteBulkConfirm: null,
@@ -107,6 +114,7 @@ export const useModalStore = create((set, get) => ({
   historyModal: { ...DEFAULTS.historyModal },
   addHistoryModal: { ...DEFAULTS.addHistoryModal },
   fundTagsEdit: { ...DEFAULTS.fundTagsEdit },
+  fundReportModal: { ...DEFAULTS.fundReportModal },
 
   // ---- Confirm dialogs (truthy/null) ----
   clearConfirm: null,
