@@ -252,6 +252,78 @@ describe('AKTools Provider - getFundHoldings', () => {
       }
     );
   });
+
+  it('多季度响应 → 只取最新一期，并按占净值比例降序取前 10', async () => {
+    const rows = [
+      // 更旧但权重极高：绝不能被采用
+      { 序号: 1, 股票代码: 'OLD1', 股票名称: '旧季一', 占净值比例: 99.9, 季度: '2025年4季度股票投资明细' }
+    ];
+    // 最新一期含 12 只，刻意按权重升序写入以验证「排序」而非「上游顺序」
+    for (let i = 1; i <= 12; i++) {
+      rows.push({
+        序号: i,
+        股票代码: `NEW${String(i).padStart(2, '0')}`,
+        股票名称: `新季${i}`,
+        占净值比例: i,
+        季度: '2026年1季度股票投资明细'
+      });
+    }
+    await withMockFetch(
+      async () => okJson({ success: true, data: rows }),
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundHoldings: true }
+        });
+        const out = await provider.getFundHoldings('000001', '2026');
+        assert.equal(out.holdings.length, 10);
+        assert.equal(out.reportDate, '2026-03-31');
+        assert.ok(out.holdings.every((h) => h.stockCode.startsWith('NEW')));
+        assert.equal(out.holdings[0].weight, 12);
+        assert.equal(out.holdings[9].weight, 3);
+      }
+    );
+  });
+
+  it('季度字段缺失 → 退化为按权重降序取前 10（不丢数据）', async () => {
+    await withMockFetch(
+      async () =>
+        okJson({
+          success: true,
+          data: [
+            { 股票代码: 'A', 股票名称: '甲', 占净值比例: 1 },
+            { 股票代码: 'B', 股票名称: '乙', 占净值比例: 9 }
+          ]
+        }),
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundHoldings: true }
+        });
+        const out = await provider.getFundHoldings('000001');
+        assert.equal(out.holdings.length, 2);
+        assert.equal(out.holdings[0].stockCode, 'B');
+      }
+    );
+  });
+
+  it('不传年份时 date 传空串（AKShare 空串=最新可用年份；省略会落到默认 2024）', async () => {
+    let capturedUrl = null;
+    await withMockFetch(
+      async (url) => {
+        capturedUrl = String(url);
+        return okJson({ success: true, data: [] });
+      },
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundHoldings: true }
+        });
+        await provider.getFundHoldings('000001');
+        assert.ok(capturedUrl.includes('date='), `期望带空 date 参数，实际请求：${capturedUrl}`);
+      }
+    );
+  });
 });
 
 describe('AKTools Provider - getStockFundamentals', () => {

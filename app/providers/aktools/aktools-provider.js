@@ -107,6 +107,33 @@ const createMemoryCache = ({ maxEntries = 32 } = {}) => {
 const STOCK_VALUE_ROWS_CACHE_TTL = 10 * 60 * 1000;
 
 /**
+ * 「2026年2季度股票投资明细」→ 可比较的期次序号（year * 4 + quarter）；解析失败返回 -1。
+ *
+ * fund_portfolio_hold_em 单次返回「指定年份的全部季度」（实测 4 个季度混在一起），
+ * 必须按期次挑出最新一期，否则会拿到该年最早一期的持仓。
+ */
+const parseQuarterRank = (raw) => {
+  const m = String(raw || '').match(/(\d{4})\s*年\s*([1-4])\s*季度/);
+  if (!m) return -1;
+  return Number(m[1]) * 4 + Number(m[2]);
+};
+
+/**
+ * 从多季度响应中挑出「最新一期」的行。
+ * 全部季度解析失败时退化为原数组（由调用方按权重排序决定展示内容）。
+ */
+const pickLatestQuarterRows = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  let best = -1;
+  for (const row of rows) {
+    const rank = parseQuarterRank(row?.['季度']);
+    if (rank > best) best = rank;
+  }
+  if (best < 0) return rows;
+  return rows.filter((row) => parseQuarterRank(row?.['季度']) === best);
+};
+
+/**
  * 创建 AKTools Provider
  *
  * @param {object} [options]
@@ -264,7 +291,18 @@ export function createAktoolsProvider(options = {}) {
             holdings: []
           };
         }
-        const holdings = rows.map(mapHoldingRow).filter(Boolean).slice(0, 10);
+        const holdings = pickLatestQuarterRows(rows)
+          .map(mapHoldingRow)
+          .filter(Boolean)
+          // fund_portfolio_hold_em 的「占净值比例」是百分数数字（9.61 = 9.61%）；
+          // 且 Q1/Q3 只披露前十大、Q2/Q4（半年报/年报）披露全量，行数 10~100 不等，
+          // 故必须按权重降序取前 10，不能依赖上游返回顺序。
+          .sort((a, b) => {
+            const wa = Number.isFinite(a.weight) ? a.weight : -1;
+            const wb = Number.isFinite(b.weight) ? b.weight : -1;
+            return wb - wa;
+          })
+          .slice(0, 10);
         const reportDate = holdings[0]?.reportDate || null;
         return {
           code: c,

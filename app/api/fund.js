@@ -1570,8 +1570,43 @@ export const fetchFundData = async (c, overrideDataSource) => {
 };
 
 /**
+ * 持仓兜底数据源：AKTools / AKShare `fund_portfolio_hold_em`（天天基金 F10 持仓明细）。
+ *
+ * 东财移动端 FundMNInverstPosition 偶发 `Success=false`（ErrMsg=「网络繁忙」）或超时；
+ * 本函数把 AKShare 行结构适配成移动端响应结构，使下游解析逻辑（含联接基金 ETFCODE
+ * 分支、上一季度披露判断）无需改动即可复用。
+ *
+ * 差异说明：
+ *   - 移动端直接给报告期 `Expansion`；AKTools 侧由「季度」推导（见 mapHoldingRow）
+ *   - AKTools 对联接基金直接返回穿透后的持仓，故不提供 `ETFCODE`
+ *   - 「最新季度 + 按占净值比例降序 + 前 10」由 provider 侧保证
+ *
+ * @param {string} fundCode
+ * @returns {Promise<object|null>} 适配后的移动端响应；无持仓数据时返回 null
+ */
+const loadFundHoldingsFromAktools = async (fundCode) => {
+  const result = await AKTOOLS_PROVIDER.getFundHoldings(fundCode);
+  const rows = isArray(result?.holdings) ? result.holdings : [];
+  if (rows.length === 0) return null;
+  return {
+    Success: true,
+    Expansion: result.reportDate || null,
+    Datas: {
+      fundStocks: rows.map((h) => ({
+        GPDM: h.stockCode || '',
+        GPJC: h.stockName || '',
+        // 移动端口径 JZBL 是字符串数字（下游拼 `%`），AKTools 是百分数 number
+        JZBL: isNumber(h.weight) ? String(h.weight) : ''
+      })),
+      ETFCODE: ''
+    }
+  };
+};
+
+/**
  * 拉取东财移动端「基金持仓」原始响应（FundMNInverstPosition），带 1 小时缓存。
  * 联接基金的目标 ETF 也复用本函数、按 ETFCODE 回源。
+ * 移动端失败（含「网络繁忙」）时回落 AKTools fund_portfolio_hold_em。
  * @param {string} fundCode
  */
 const loadFundHoldingsPayload = (fundCode) => {
@@ -1580,11 +1615,30 @@ const loadFundHoldingsPayload = (fundCode) => {
   return getQueryClient().fetchQuery({
     queryKey: qk.fundHoldingsArchives(fc),
     queryFn: async () => {
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error('数据加载失败');
-      const json = await resp.json();
-      if (!json || !json.Success) throw new Error(json?.ErrMsg || '数据加载失败');
-      return json;
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('数据加载失败');
+        const json = await resp.json();
+        if (!json || !json.Success) throw new Error(json?.ErrMsg || '数据加载失败');
+        return json;
+      } catch (e) {
+        // 移动端偶发「网络繁忙」/超时：回落 AKTools（AKShare fund_portfolio_hold_em）
+        fundDebugLog('fetchFundHoldings 移动端失败，尝试 AKTools 兜底', {
+          code: fc,
+          error: String(e?.message || e)
+        });
+        try {
+          const fallback = await loadFundHoldingsFromAktools(fc);
+          if (fallback) return fallback;
+        } catch (e2) {
+          fundDebugLog('fetchFundHoldings AKTools 兜底亦失败', {
+            code: fc,
+            error: String(e2?.message || e2)
+          });
+        }
+        // 两条链路都不可用时仍抛原错误：TanStack 不会把失败结果写进缓存，便于下次重试
+        throw e;
+      }
     },
     staleTime: 60 * 60 * 1000
   });

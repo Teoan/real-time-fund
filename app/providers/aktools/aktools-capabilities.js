@@ -4,7 +4,8 @@
  * 标记当前实现的 Provider 支持哪些业务能力。
  * 「AKShare 有接口」≠「AKTools 服务实际可用」≠「返回结构符合项目预期」。
  * 因此所有能力在编写时必须按真实联调结果调整；
- * 已联调开启：getStockFundamentals、getFundDetail；其余待联调，保持关闭。
+ * 已联调开启：getFundDetail、getFundHoldings、getStockFundamentals、getStockRoe、
+ * getStockHkFinancial、getStockHkValueHistory、getStockUsFinancial；其余待联调，保持关闭。
  *
  * @typedef {object} AktoolsProviderCapabilities
  * @property {boolean} searchFund          - 基金搜索
@@ -32,7 +33,11 @@ const DEFAULT_CAPABILITIES = {
   getFundDetail: true,
   getFundLatestNav: false,
   getFundNavHistory: false,
-  getFundHoldings: false,
+  // 联调通过（2026-10-16）：fund_portfolio_hold_em 200 / ~20~24KB / ~0.5s，
+  // 返回指定年份「全部季度」（Q1/Q3 仅前十大、Q2/Q4 为半年报/年报全量），
+  // 用作东财移动端 FundMNInverstPosition「网络繁忙」时的持仓兜底。
+  // ⚠️ date 必须显式传空串才取「最新可用年份」；省略参数会落到 AKShare 签名默认值 "2024"（静默陈旧）。
+  getFundHoldings: true,
   getFundOverview: false,
   getFundManager: false,
   getFundDividend: false,
