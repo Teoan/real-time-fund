@@ -17,6 +17,7 @@ import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { isArray, isBoolean, isFunction, isNil, isNumber, isObject, isPlainObject, isString } from 'lodash';
 import { v4 as uuidv4 } from 'uuid';
 import { toast as sonnerToast } from 'sonner';
+import { getQueryClient } from '@/app/lib/get-query-client';
 
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from '@/components/ui/empty';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -211,6 +212,8 @@ export default function HomePage() {
     setIsGroupSummarySticky,
     aktoolsStockFundamentalsEnabled,
     setAktoolsStockFundamentalsEnabled,
+    aktoolsBaseUrl,
+    setAktoolsBaseUrl,
     syncFromCustomSettings
   } = useSettingsStore();
 
@@ -3492,7 +3495,8 @@ export default function HomePage() {
     dynamicStyleOverride,
     containerWidthOverride,
     showGroupDropdownOverride,
-    aktoolsStockFundamentalsOverride
+    aktoolsStockFundamentalsOverride,
+    aktoolsBaseUrlOverride
   ) => {
     e?.preventDefault?.();
     const seconds = secondsOverride ?? tempSeconds;
@@ -3538,6 +3542,9 @@ export default function HomePage() {
       : aktoolsStockFundamentalsEnabled;
     setAktoolsStockFundamentalsEnabled(nextAktoolsStockFundamentals);
 
+    const nextAktoolsBaseUrl = isString(aktoolsBaseUrlOverride) ? aktoolsBaseUrlOverride : aktoolsBaseUrl;
+    setAktoolsBaseUrl(nextAktoolsBaseUrl);
+
     // 在移动端不裁剪也不修改 pcContainerWidth，直接保留原值
     let w = Number(containerWidthOverride ?? containerWidth) || 1200;
     if (!targetIsMobile) {
@@ -3549,7 +3556,8 @@ export default function HomePage() {
       const parsed = useStorageStore.getState().customSettings || {};
       const base = {
         ...parsed,
-        aktoolsStockFundamentalsEnabled: nextAktoolsStockFundamentals
+        aktoolsStockFundamentalsEnabled: nextAktoolsStockFundamentals,
+        aktoolsBaseUrl: nextAktoolsBaseUrl
       };
       if (targetIsMobile) {
         // 仅更新当前运行端对应的开关键，不覆盖 PC 端宽度
@@ -3569,6 +3577,12 @@ export default function HomePage() {
           dynamicStylePc: nextDynamicStyle,
           showGroupDropdownPc: nextShowGroupDropdown
         });
+      }
+    } catch {}
+    // AKTools 服务地址变更时清掉该数据源的全部内存缓存，避免下次请求命中旧服务器数据
+    try {
+      if (nextAktoolsBaseUrl !== aktoolsBaseUrl) {
+        getQueryClient().removeQueries({ queryKey: ['aktools'] });
       }
     } catch {}
     setSettingsOpen(false);
@@ -4288,6 +4302,8 @@ export default function HomePage() {
     showGroupDropdownMobile,
     aktoolsStockFundamentalsEnabled,
     setAktoolsStockFundamentalsEnabled,
+    aktoolsBaseUrl,
+    setAktoolsBaseUrl,
     scanProgress: scanProgress ?? { stage: 'ocr', current: 0, total: 0 },
     scanImportProgress: scanImportProgress ?? { current: 0, total: 0, success: 0, failed: 0 },
     // Refs

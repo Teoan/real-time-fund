@@ -220,6 +220,26 @@ Next 把它内联进产物；运行阶段 `entrypoint.sh` 再用真实环境变�
 未传该变量时替换结果为空串，前端会回落默认地址 —— 这是刻意的：
 若让 baseUrl 变成空串，所有请求会退化成相对路径（打到 nginx 自己的 404）。
 
+### 运行时覆盖（设置页）
+
+除构建期环境变量外，**设置页**（设置 → 数据源 · AKTools → AKTools 服务地址）可运行时覆盖 baseUrl。
+
+优先级：**设置页非空合法 `http(s)://` 地址 > 构建期 `NEXT_PUBLIC_AKTOOLS_BASE_URL` > `AKTOOLS_DEFAULT_BASE_URL`**。
+
+实现要点：
+
+- `app/stores/settingsStore.js` 新增 `aktoolsBaseUrl`（空串 = 用默认），随 `customSettings` 持久化并自动参与云端同步。
+- 覆盖在 **client 层**逐调用解析（`aktools-client.js` 的 `resolveEffectiveBaseUrl`），不重建 provider 单例：
+  设置页改完保存后下一次请求立即生效。
+- resolver 由 `app/providers/aktools/index.js`（业务侧 barrel）在模块加载时注入，
+  读取 `useSettingsStore.getState().aktoolsBaseUrl`；测试直接 import 内部文件时 resolver 为 null，行为不变。
+- 校验：非 `http(s)://` 开头的输入（含空白、`ftp://`、`javascript:` 等）一律忽略并回落默认，
+  避免非法值把请求打成相对路径或执行非 HTTP 协议。
+- 切换地址后保存时会清掉 `['aktools']` 前缀的全部 TanStack 缓存（`removeQueries`），
+  防止下一个请求命中旧服务器缓存的数据。
+
+> 空串重置：把输入框清空（或点「恢复默认」）即回落构建期环境变量默认地址。
+
 ## 运行测试
 
 ```
@@ -231,7 +251,7 @@ node --test app/providers/aktools/__tests__/*.test.js
 
 ## 设计原则
 
-1. **Provider 不在业务层写 URL**：业务层只 `import { defaultAktoolsProvider } from '@/app/providers/aktools'`，baseUrl 完全在 `aktools-config.js` 中。
+1. **Provider 不在业务层写 URL**：业务层只 `import { defaultAktoolsProvider } from '@/app/providers/aktools'`；构建期 baseUrl 在 `aktools-config.js`，运行期覆盖（设置页 `settingsStore.aktoolsBaseUrl`）由 `aktools-client.js` 逐调用解析。
 2. **AKShare 字段不得泄漏**：所有 AKShare 中文列名（如 `单位净值`）必须经过 `aktools-mappers.js` 转换，业务层只看到 `unitNav`。
 3. **错误归一化**：UI 层不会直接收到 `fetch` 或 `JSON.parse` 异常，只会收到 `AktoolsError` 家族。
 4. **不绑定 UI**：本目录故意**不修改** `app/api/fund.js`、`FundDataSourceSelector.jsx`、`page.jsx`。是否接入数据源切换 UI 由后续 PR 决定。
@@ -240,7 +260,8 @@ node --test app/providers/aktools/__tests__/*.test.js
 
 ```js
 // 1) 在 fetchFundValuationBySource 中加入 source=5 路由（暂不推荐，先做 fallback）
-// 2) 在 settingsStore 中加入 AKTools 启用开关与 baseUrl 配置项
+// 2) ✅ 已完成：settingsStore 中的 AKTools 启用开关（aktoolsStockFundamentalsEnabled）
+//    与 baseUrl 配置项（aktoolsBaseUrl，设置页「数据源 · AKTools」可改，见上「运行时覆盖」）
 // 3) 在 FundDataSourceSelector.jsx 中展示健康状态（healthCheck 结果）
 // 4) 用 aktools-capabilities 中真实联调结果更新能力矩阵
 ```

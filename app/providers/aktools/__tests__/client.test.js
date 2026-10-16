@@ -13,10 +13,11 @@
  *   - 重试仅对 transient（网络）错误生效，FundNotFound 立即抛
  */
 
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createAktoolsClient } from '../aktools-client.js';
+import { createAktoolsClient, setAktoolBaseUrlResolver } from '../aktools-client.js';
+import { AKTOOLS_BASE_URL } from '../aktools-config.js';
 import {
   FundNotFoundError,
   AktoolsApiError,
@@ -204,5 +205,77 @@ describe('AKTools client', () => {
         await assert.rejects(c.call('fund_x'), AktoolsTimeoutError);
       }
     );
+  });
+});
+
+describe('AKTools client baseUrl 运行时覆盖', () => {
+  // 捕获 fetch 实际收到的 URL（createAktoolsClient 不显式传 baseUrl 时走 resolver/默认）
+  const captureUrl = () => {
+    let calledUrl = null;
+    const mock = async (url) => {
+      calledUrl = url;
+      return okJson({ success: true, data: [] });
+    };
+    return {
+      mock,
+      getUrl: () => calledUrl
+    };
+  };
+
+  // 每个用例后复位 resolver，避免污染同进程内其他用例
+  afterEach(() => setAktoolBaseUrlResolver(null));
+
+  it('无显式 baseUrl + resolver 返回合法 http(s):// → 使用 resolver 地址', async () => {
+    setAktoolBaseUrlResolver(() => 'https://override.example.com/api/public/');
+    const { mock, getUrl } = captureUrl();
+    await withMockFetch(mock, async () => {
+      const c = createAktoolsClient({ retries: 0 });
+      await c.call('fund_name_em');
+    });
+    assert.equal(getUrl(), 'https://override.example.com/api/public/fund_name_em');
+  });
+
+  it('resolver 返回非 http(s):// 串 → 回落 AKTOOLS_BASE_URL', async () => {
+    for (const bad of ['ftp://x.example', 'abc', '   ', '', 'javascript:alert(1)']) {
+      setAktoolBaseUrlResolver(() => bad);
+      const { mock, getUrl } = captureUrl();
+      await withMockFetch(mock, async () => {
+        const c = createAktoolsClient({ retries: 0 });
+        await c.call('fund_name_em');
+      });
+      assert.equal(getUrl(), `${AKTOOLS_BASE_URL}/fund_name_em`);
+    }
+  });
+
+  it('未注册 resolver → 回落 AKTOOLS_BASE_URL', async () => {
+    setAktoolBaseUrlResolver(null);
+    const { mock, getUrl } = captureUrl();
+    await withMockFetch(mock, async () => {
+      const c = createAktoolsClient({ retries: 0 });
+      await c.call('fund_name_em');
+    });
+    assert.equal(getUrl(), `${AKTOOLS_BASE_URL}/fund_name_em`);
+  });
+
+  it('显式 options.baseUrl 优先于 resolver', async () => {
+    setAktoolBaseUrlResolver(() => 'https://override.example.com/api/public');
+    const { mock, getUrl } = captureUrl();
+    await withMockFetch(mock, async () => {
+      const c = createAktoolsClient({ baseUrl: 'http://explicit', retries: 0 });
+      await c.call('fund_name_em');
+    });
+    assert.equal(getUrl(), 'http://explicit/fund_name_em');
+  });
+
+  it('resolver 抛错 → 回落 AKTOOLS_BASE_URL（不把异常扩散到请求）', async () => {
+    setAktoolBaseUrlResolver(() => {
+      throw new Error('boom');
+    });
+    const { mock, getUrl } = captureUrl();
+    await withMockFetch(mock, async () => {
+      const c = createAktoolsClient({ retries: 0 });
+      await c.call('fund_name_em');
+    });
+    assert.equal(getUrl(), `${AKTOOLS_BASE_URL}/fund_name_em`);
   });
 });

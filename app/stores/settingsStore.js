@@ -1,4 +1,4 @@
-import { isBoolean, isFunction, isObject } from 'lodash';
+import { isBoolean, isFunction, isObject, isString } from 'lodash';
 import { create } from 'zustand';
 
 /**
@@ -19,6 +19,10 @@ export const useSettingsStore = create((set) => ({
   // AKTools 数据源：A 股单股估值走 AKTools (AKShare stock_value_em) 而非东财 push2。
   // 默认 true —— 使用 AKTools 数据源，push2 作为 fallback。
   aktoolsStockFundamentalsEnabled: true,
+  // AKTools 服务地址运行时覆盖（设置页可改）。空串 = 用构建期 AKTOOLS_BASE_URL。
+  // 校验在 aktools-client.js 的 resolveEffectiveBaseUrl 做（必须 http(s):// 开头），
+  // 这里只存原值，避免 store 与 client 各持一份校验逻辑而漂移。
+  aktoolsBaseUrl: '',
 
   setTempSeconds: (val) => set({ tempSeconds: isFunction(val) ? val(useSettingsStore.getState().tempSeconds) : val }),
   setContainerWidth: (val) =>
@@ -59,6 +63,10 @@ export const useSettingsStore = create((set) => ({
         ? val(useSettingsStore.getState().aktoolsStockFundamentalsEnabled)
         : val
     }),
+  setAktoolsBaseUrl: (val) =>
+    set({
+      aktoolsBaseUrl: isFunction(val) ? val(useSettingsStore.getState().aktoolsBaseUrl) : val
+    }),
 
   /**
    * 从 customSettings 解析并同步配置到 Zustand 状态
@@ -92,6 +100,8 @@ export const useSettingsStore = create((set) => ({
         patch.showGroupDropdownMobile = customSettings.showGroupDropdownMobile;
       if (isBoolean(customSettings.aktoolsStockFundamentalsEnabled))
         patch.aktoolsStockFundamentalsEnabled = customSettings.aktoolsStockFundamentalsEnabled;
+      // 服务地址按字符串原样同步（trim 与校验都在 client 侧做，避免两处逻辑漂移）
+      if (isString(customSettings.aktoolsBaseUrl)) patch.aktoolsBaseUrl = customSettings.aktoolsBaseUrl;
 
       if (Object.keys(patch).length > 0) {
         set(patch);

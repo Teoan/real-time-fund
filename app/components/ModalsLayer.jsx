@@ -927,6 +927,8 @@ function ModalsLayerContent({ callbacksRef }) {
             showGroupDropdownMobile={cb.current.showGroupDropdownMobile}
             aktoolsStockFundamentalsEnabled={cb.current.aktoolsStockFundamentalsEnabled}
             setAktoolsStockFundamentalsEnabled={cb.current.setAktoolsStockFundamentalsEnabled}
+            aktoolsBaseUrl={cb.current.aktoolsBaseUrl}
+            setAktoolsBaseUrl={cb.current.setAktoolsBaseUrl}
           />
         )}
       </AnimatePresence>

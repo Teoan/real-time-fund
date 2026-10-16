@@ -20,6 +20,49 @@ import { AKTOOLS_BASE_URL, AKTOOLS_REQUEST_RETRIES, AKTOOLS_REQUEST_TIMEOUT_MS }
 
 const _isNil = (v) => v == null;
 
+// 本文件在 node --test 下被直接 import，lodash 是 CommonJS、纯 ESM 下 named import 不可用，
+// 故沿用本文件既有的原生 typeof 风格（与 :141 `typeof fn !== 'string'` 一致），不引入 lodash。
+const _isFunction = (v) => typeof v === 'function';
+const _isString = (v) => typeof v === 'string';
+
+/**
+ * 运行时 baseUrl 覆盖解析器（由 app/providers/aktools/index.js 注入，读 settingsStore.aktoolsBaseUrl）。
+ *
+ * 设计：
+ * - aktools-config.js 刻意不依赖项目内常量（见其注释），故「设置页覆盖」的解析放在 client 这一层。
+ * - 仅业务侧 barrel 注入 resolver；测试直接 import 本文件时 resolver 为 null，行为与改动前一致
+ *   （回落 AKTOOLS_BASE_URL）。
+ * - resolver 返回值必须经校验：非 http(s):// 开头视为空，避免用户填入垃圾串导致所有请求退化成相对路径。
+ */
+let _aktoolsBaseUrlResolver = null;
+
+export const setAktoolBaseUrlResolver = (fn) => {
+  _aktoolsBaseUrlResolver = _isFunction(fn) ? fn : null;
+};
+
+/**
+ * 解析单次调用实际使用的 baseUrl。
+ *
+ * 优先级：显式注入（测试用 options.baseUrl）> resolver（settingsStore 运行时覆盖）> AKTOOLS_BASE_URL（构建期）。
+ * 任一来源都做 trim + 去尾斜杠；resolver 来源还需通过 http(s):// 校验，不合法回落默认。
+ */
+const resolveEffectiveBaseUrl = (explicitOverride) => {
+  if (_isString(explicitOverride) && explicitOverride.trim()) {
+    return explicitOverride.trim().replace(/\/+$/, '');
+  }
+  let fromSettings = '';
+  try {
+    fromSettings = _aktoolsBaseUrlResolver ? String(_aktoolsBaseUrlResolver() ?? '') : '';
+  } catch (e) {
+    fromSettings = '';
+  }
+  if (_isString(fromSettings)) {
+    const trimmed = fromSettings.trim().replace(/\/+$/, '');
+    if (trimmed && /^https?:\/\/.+/.test(trimmed)) return trimmed;
+  }
+  return AKTOOLS_BASE_URL;
+};
+
 /**
  * 规范化 AKShare DataFrame → JSON 过程中出现的非法值。
  *
@@ -133,7 +176,9 @@ const buildUrl = (baseUrl, fn, params) => {
  * @returns {{ call: (fn: string, params?: object) => Promise<any>, healthCheck: () => Promise<object> }}
  */
 export function createAktoolsClient(options = {}) {
-  const baseUrl = options.baseUrl || AKTOOLS_BASE_URL;
+  // 显式注入（测试用）；为空时改由 resolveEffectiveBaseUrl 在每次调用时按设置/默认解析，
+  // 这样设置页改了地址无需重建 provider 单例即可生效。
+  const explicitBaseUrl = _isString(options.baseUrl) && options.baseUrl.trim() ? options.baseUrl : null;
   const timeoutMs = options.timeoutMs ?? AKTOOLS_REQUEST_TIMEOUT_MS;
   const retries = options.retries ?? AKTOOLS_REQUEST_RETRIES;
 
@@ -141,7 +186,7 @@ export function createAktoolsClient(options = {}) {
     if (!fn || typeof fn !== 'string') {
       throw new AktoolsApiError('AKTools 调用必须提供 AKShare 函数名', { status: 0 });
     }
-    const url = buildUrl(baseUrl, fn, params);
+    const url = buildUrl(resolveEffectiveBaseUrl(explicitBaseUrl), fn, params);
     let lastErr = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
@@ -206,7 +251,7 @@ export function createAktoolsClient(options = {}) {
     }
   };
 
-  return { call, healthCheck, baseUrl };
+  return { call, healthCheck, baseUrl: explicitBaseUrl || AKTOOLS_BASE_URL };
 }
 
 export const __test__ = {

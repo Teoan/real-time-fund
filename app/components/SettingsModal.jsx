@@ -8,6 +8,8 @@ import { Switch } from '@/components/ui/switch';
 import ConfirmModal from './ConfirmModal';
 import { ResetIcon, SettingsIcon } from './Icons';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { AKTOOLS_BASE_URL } from '@/app/providers/aktools';
+import { isString } from 'lodash';
 
 export default function SettingsModal({
   onClose,
@@ -30,7 +32,9 @@ export default function SettingsModal({
   showGroupDropdownPc = false,
   showGroupDropdownMobile = false,
   aktoolsStockFundamentalsEnabled = false,
-  setAktoolsStockFundamentalsEnabled
+  setAktoolsStockFundamentalsEnabled,
+  aktoolsBaseUrl = '',
+  setAktoolsBaseUrl
 }) {
   const isMobile = useIsMobile();
   const [sliderDragging, setSliderDragging] = useState(false);
@@ -48,6 +52,7 @@ export default function SettingsModal({
   const [localAktoolsStockFundamentalsEnabled, setLocalAktoolsStockFundamentalsEnabled] = useState(
     aktoolsStockFundamentalsEnabled
   );
+  const [localAktoolsBaseUrl, setLocalAktoolsBaseUrl] = useState(aktoolsBaseUrl);
   const [localContainerWidth, setLocalContainerWidth] = useState(containerWidth);
   const pageWidthTrackRef = useRef(null);
   const [viewWidth, setViewWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
@@ -62,6 +67,13 @@ export default function SettingsModal({
   const clampedWidth = Math.min(maxWidth, Math.max(600, Number(localContainerWidth) || 1200));
   const widthRange = Math.max(1, maxWidth - 600);
   const pageWidthPercent = ((clampedWidth - 600) / widthRange) * 100;
+
+  // 生效地址提示：与 aktools-client.js resolveEffectiveBaseUrl 同一条校验（http(s):// 开头），
+  // 非空合法时显示自定义值，否则显示构建期默认 AKTOOLS_BASE_URL。
+  const trimmedAktoolsBaseUrl = isString(localAktoolsBaseUrl) ? localAktoolsBaseUrl.trim() : '';
+  const effectiveAktoolsBaseUrl = /^https?:\/\/.+/.test(trimmedAktoolsBaseUrl)
+    ? trimmedAktoolsBaseUrl
+    : AKTOOLS_BASE_URL;
 
   const updateWidthByClientX = (clientX) => {
     if (!pageWidthTrackRef.current || !setContainerWidth) return;
@@ -129,6 +141,10 @@ export default function SettingsModal({
   useEffect(() => {
     setLocalAktoolsStockFundamentalsEnabled(aktoolsStockFundamentalsEnabled);
   }, [aktoolsStockFundamentalsEnabled]);
+
+  useEffect(() => {
+    setLocalAktoolsBaseUrl(aktoolsBaseUrl);
+  }, [aktoolsBaseUrl]);
 
   useEffect(() => {
     setLocalContainerWidth(containerWidth);
@@ -362,6 +378,28 @@ export default function SettingsModal({
                 aria-label="启用 AKTools 单股估值"
               />
             </div>
+            <div style={{ marginTop: 12 }}>
+              <div className="muted" style={{ marginBottom: 6, fontSize: '0.8rem' }}>
+                AKTools 服务地址（留空用默认）
+              </div>
+              <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                <input
+                  className="input"
+                  type="url"
+                  inputMode="url"
+                  value={localAktoolsBaseUrl}
+                  onChange={(e) => setLocalAktoolsBaseUrl(e.target.value)}
+                  placeholder={AKTOOLS_BASE_URL}
+                  style={{ fontSize: '16PX' }}
+                />
+                <button type="button" className="button" onClick={() => setLocalAktoolsBaseUrl('')}>
+                  恢复默认
+                </button>
+              </div>
+              <div className="muted" style={{ marginTop: 6, fontSize: '0.75rem' }}>
+                当前生效：{effectiveAktoolsBaseUrl}
+              </div>
+            </div>
           </div>
           <div className="form-group" style={{ marginBottom: 16 }}>
             <div className="muted" style={{ marginBottom: 8, fontSize: '0.8rem' }}>
@@ -407,7 +445,8 @@ export default function SettingsModal({
                   isMobile ? localDynamicStyleMobile : localDynamicStylePc,
                   localContainerWidth,
                   isMobile ? localShowGroupDropdownMobile : localShowGroupDropdownPc,
-                  localAktoolsStockFundamentalsEnabled
+                  localAktoolsStockFundamentalsEnabled,
+                  localAktoolsBaseUrl
                 )
               }
               disabled={localSeconds < 30}
