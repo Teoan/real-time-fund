@@ -235,8 +235,16 @@ Next 把它内联进产物；运行阶段 `entrypoint.sh` 再用真实环境变�
   读取 `useSettingsStore.getState().aktoolsBaseUrl`；测试直接 import 内部文件时 resolver 为 null，行为不变。
 - 校验：非 `http(s)://` 开头的输入（含空白、`ftp://`、`javascript:` 等）一律忽略并回落默认，
   避免非法值把请求打成相对路径或执行非 HTTP 协议。
-- 切换地址后保存时会清掉 `['aktools']` 前缀的全部 TanStack 缓存（`removeQueries`），
-  防止下一个请求命中旧服务器缓存的数据。
+- **切换地址后必须清缓存**，且要清三层 —— 只清 TanStack 是不够的：
+
+  | 层                     | 载体                                                                                                                                        | 残留后果                                                                                    | 清理方式                              |
+  | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------- |
+  | provider 实例内存缓存  | `createMemoryCache` 的进程内 Map                                                                                                            | 旧地址数据按 `staleTime` 继续命中，最长 24h（`getStockFundamentals` 的 TTL = `ONE_DAY_MS`） | `defaultAktoolsProvider.clearCache()` |
+  | TanStack Query         | 业务侧键 `stockFundamentals` / `stockRoe` / `stockUsFinancial`（`qk.aktools*` 那批只在从未被调用的 `createAktoolsProviderForApp` 路径生效） | 同上，取决于 staleTime                                                                      | `removeQueries({ queryKey })`         |
+  | 天级 localStorage 缓存 | `aktools:stockFundamentals:*` / `aktools:hkValueHistory:*` / `aktools:stockValueWindow:*`                                                   | `readEntry` 只按 24h 判有效期、不记录来源地址，旧数据继续被返回                             | `clearAllAktoolsCache()`              |
+
+  三层由 `app/providers/aktools/index.js` 的 `resetAktoolsCaches()` 统一清理，业务侧只需调用它
+  （`app/page.jsx` 的 `saveSettings` 在地址变化时调用）。任一层清理失败都不会抛出，不影响保存流程。
 
 > 空串重置：把输入框清空（或点「恢复默认」）即回落构建期环境变量默认地址。
 

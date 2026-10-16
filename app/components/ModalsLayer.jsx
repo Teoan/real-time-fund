@@ -942,7 +942,6 @@ function ModalsLayerContent({ callbacksRef }) {
             aktoolsStockFundamentalsEnabled={cb.current.aktoolsStockFundamentalsEnabled}
             setAktoolsStockFundamentalsEnabled={cb.current.setAktoolsStockFundamentalsEnabled}
             aktoolsBaseUrl={cb.current.aktoolsBaseUrl}
-            setAktoolsBaseUrl={cb.current.setAktoolsBaseUrl}
           />
         )}
       </AnimatePresence>

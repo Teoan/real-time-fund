@@ -90,6 +90,14 @@ const createMemoryCache = ({ maxEntries = 32 } = {}) => {
       }
 
       return promise;
+    },
+    /**
+     * 清空全部条目。
+     * 用途：切换 AKTools 服务地址后必须调用（见 createAktoolsProvider 返回的 clearCache），
+     * 否则旧地址的数据会继续按 staleTime 命中（getStockFundamentals 的 TTL 为 24h）。
+     */
+    clear() {
+      store.clear();
     }
   };
 };
@@ -532,7 +540,24 @@ export function createAktoolsProvider(options = {}) {
     getStockHkRoe,
     getStockHkValueHistory,
     getStockUsFinancial,
-    healthCheck
+    healthCheck,
+    /**
+     * 清空本实例承载的全部缓存。
+     *
+     * 业务侧「切换 AKTools 服务地址」时必须调用：默认 provider 用的是实例内内存缓存
+     * （options.cache 未注入时走 createMemoryCache），它不受 TanStack 的 removeQueries 影响，
+     * 残留条目会让旧地址的数据继续被返回（最长 staleTime，如 getStockFundamentals = 24h）。
+     *
+     * 注入 TanStack 缓存（createAktoolsProviderForApp）时本方法为空操作，
+     * 由调用方另行清理对应 query key（见 app/providers/aktools/index.js 的 resetAktoolsCaches）。
+     */
+    clearCache: () => {
+      try {
+        cache.clear?.();
+      } catch {
+        // 忽略：清缓存失败不应影响保存流程
+      }
+    }
   };
 }
 

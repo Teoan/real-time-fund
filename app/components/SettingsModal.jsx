@@ -33,8 +33,7 @@ export default function SettingsModal({
   showGroupDropdownMobile = false,
   aktoolsStockFundamentalsEnabled = false,
   setAktoolsStockFundamentalsEnabled,
-  aktoolsBaseUrl = '',
-  setAktoolsBaseUrl
+  aktoolsBaseUrl = ''
 }) {
   const isMobile = useIsMobile();
   const [sliderDragging, setSliderDragging] = useState(false);

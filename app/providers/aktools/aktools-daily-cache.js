@@ -245,6 +245,30 @@ export const cleanExpiredAktoolsCache = () => {
 };
 
 /**
+ * 清空本模块全部缓存族（不做过期/版本判断，直接删除）。
+ *
+ * 用途：切换 AKTools 服务地址后，旧地址写入的天级缓存必须立即失效 —— readEntry 只按
+ * CACHE_MAX_AGE_MS（24h）判断有效期，不记录数据来自哪个地址，残留会让新地址配置在最长
+ * 24h 内继续返回旧数据。
+ *
+ * 与 cleanExpiredAktoolsCache 的区别：后者只删过期/版本不符的条目，本函数全删。
+ */
+export const clearAllAktoolsCache = () => {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const keysToDelete = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (CACHE_PREFIXES.some((p) => key.startsWith(p))) keysToDelete.push(key);
+    }
+    keysToDelete.forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // ignore
+  }
+};
+
+/**
  * 查询单只股票的天级缓存。
  * @param {string} symbol - 6 位 A 股代码
  * @returns {StockFundamental|null}

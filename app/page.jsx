@@ -17,7 +17,7 @@ import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { isArray, isBoolean, isFunction, isNil, isNumber, isObject, isPlainObject, isString } from 'lodash';
 import { v4 as uuidv4 } from 'uuid';
 import { toast as sonnerToast } from 'sonner';
-import { getQueryClient } from '@/app/lib/get-query-client';
+import { resetAktoolsCaches } from '@/app/providers/aktools';
 
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from '@/components/ui/empty';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -3579,10 +3579,12 @@ export default function HomePage() {
         });
       }
     } catch {}
-    // AKTools 服务地址变更时清掉该数据源的全部内存缓存，避免下次请求命中旧服务器数据
+    // AKTools 服务地址变更时清空该数据源的三层缓存（provider 内存 + TanStack + 天级 localStorage）。
+    // 只清 TanStack 不够：默认 provider 用的是实例内内存缓存，天级缓存的 TTL 同为 24h，
+    // 任何一层残留都会让旧地址的数据继续被返回。
     try {
       if (nextAktoolsBaseUrl !== aktoolsBaseUrl) {
-        getQueryClient().removeQueries({ queryKey: ['aktools'] });
+        resetAktoolsCaches();
       }
     } catch {}
     setSettingsOpen(false);
@@ -4303,7 +4305,6 @@ export default function HomePage() {
     aktoolsStockFundamentalsEnabled,
     setAktoolsStockFundamentalsEnabled,
     aktoolsBaseUrl,
-    setAktoolsBaseUrl,
     scanProgress: scanProgress ?? { stage: 'ocr', current: 0, total: 0 },
     scanImportProgress: scanImportProgress ?? { current: 0, total: 0, success: 0, failed: 0 },
     // Refs

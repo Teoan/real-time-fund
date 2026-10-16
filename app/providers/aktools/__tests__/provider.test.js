@@ -825,3 +825,44 @@ describe('AKTools Provider - getStockUsFinancial', () => {
     );
   });
 });
+
+describe('AKTools Provider - clearCache', () => {
+  it('清空内存缓存后同一 key 会重新取数（切换服务地址的关键前提）', async () => {
+    let calls = 0;
+    await withMockFetch(
+      async () => {
+        calls += 1;
+        return okJson({
+          success: true,
+          data: [{ 基金代码: '110022', 基金简称: '易方达消费', 基金类型: '股票型' }]
+        });
+      },
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { searchFund: true }
+        });
+
+        await provider.searchFund('110022');
+        await provider.searchFund('110022');
+        assert.equal(calls, 1);
+
+        provider.clearCache();
+
+        await provider.searchFund('110022');
+        assert.equal(calls, 2);
+      }
+    );
+  });
+
+  it('可重复调用且不抛（注入 TanStack 缓存时是空操作）', () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { searchFund: true }
+    });
+    assert.doesNotThrow(() => {
+      provider.clearCache();
+      provider.clearCache();
+    });
+  });
+});

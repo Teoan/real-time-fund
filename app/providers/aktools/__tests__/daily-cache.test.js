@@ -23,6 +23,7 @@ import {
   getCachedStockValueWindow,
   writeCachedStockValueWindow,
   cleanExpiredAktoolsCache,
+  clearAllAktoolsCache,
   getAktoolsCacheStats,
   __test__ as dailyCacheInternals
 } from '../aktools-daily-cache.js';
@@ -281,5 +282,36 @@ describe('A 股分位窗口天级缓存', () => {
     mockStorage.setItem('aktools:stockValueWindow:600519', JSON.stringify(raw));
     cleanExpiredAktoolsCache();
     assert.equal(getCachedStockValueWindow('600519'), null);
+  });
+});
+
+describe('clearAllAktoolsCache', () => {
+  it('未过期条目也会被清空（切换服务地址后必须立即失效）', () => {
+    // 三族各写一条「刚写入、远未过期」的数据
+    writeCache('600519', { pe: 12.3 });
+    writeCachedStockHkValueHistory('00700', 'pe', [{ date: '2026-01-01', value: 10 }]);
+    writeCachedStockValueWindow('600519', {
+      values: { pe: [1, 2], pb: [1], ps: [1] },
+      latest: { pe: 12.3 },
+      recent: [{ date: '2026-01-02', pe: 12.3, pb: 1, ps: 1 }]
+    });
+    assert.equal(getAktoolsCacheStats().count, 3);
+
+    clearAllAktoolsCache();
+
+    assert.equal(getCachedStockFundamental('600519'), null);
+    assert.equal(getCachedStockHkValueHistory('00700', 'pe'), null);
+    assert.equal(getCachedStockValueWindow('600519'), null);
+    assert.equal(getAktoolsCacheStats().count, 0);
+  });
+
+  it('不误删非本模块的 localStorage 键', () => {
+    mockStorage.setItem('customSettings', '{"a":1}');
+    mockStorage.setItem('aktools:stockFundamentals:600519', '{"_v":1,"ts":' + Date.now() + ',"data":{}}');
+
+    clearAllAktoolsCache();
+
+    assert.equal(mockStorage.getItem('customSettings'), '{"a":1}');
+    assert.equal(mockStorage.getItem('aktools:stockFundamentals:600519'), null);
   });
 });
