@@ -35,6 +35,8 @@ dayjs.extend(isSameOrAfter);
 
 import { DEFAULT_TZ } from '@/app/constants';
 import { isNavUpdated } from '@/app/lib/fundHelpers';
+import { stalenessMinutes, STALE_THRESHOLD_MIN } from '@/app/lib/marketSession';
+import { valuationAccuracy, ACCURACY_CALIBRATION_MIN_SAMPLES } from '@/app/lib/valuationAccuracy';
 const getBrowserTimeZone = () => {
   if (typeof Intl !== 'undefined' && Intl.DateTimeFormat) {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -247,6 +249,18 @@ export default function Index({
   }, [funds, fundCode, fallbackFund, fetchedValuation]);
 
   const isAdded = useMemo(() => funds?.some((item) => item.code === f?.code), [funds, f?.code]);
+
+  // §4.8 校准估值：本地误差历史（近 20 日均偏差显著时）给出校准后的估算涨幅，
+  // 只做提示不替换主数值——用户看到的仍是数据源原始口径。
+  const calibration = useMemo(() => {
+    if (f?.noValuation || !isNumber(f?.gszzl)) return null;
+    try {
+      const res = valuationAccuracy.getCalibration(f.code, Number(f.gszzl));
+      return res?.applied ? res : null;
+    } catch {
+      return null;
+    }
+  }, [f?.code, f?.gszzl, f?.noValuation]);
 
   const [topHoldings, setTopHoldings] = useState({
     holdings: [],
@@ -572,6 +586,32 @@ export default function Index({
             <span>{f.noValuation ? '净值日期' : '估值时间'}</span>
             <strong>{f.noValuation ? formatDisplayDate(f.jzrq) : formatDisplayDate(f.gztime || f.time)}</strong>
           </div>
+          {(() => {
+            // §3.11 gztime 超过 15 分钟未推进 = 上游已停更，曲线是一条冻结的线，必须显式说明
+            if (f.noValuation || !isTradingDay) return null;
+            const mins = stalenessMinutes(f.gztime);
+            if (!isNumber(mins) || mins < STALE_THRESHOLD_MIN) return null;
+            return (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div
+                    className="badge-v"
+                    style={{
+                      background: 'color-mix(in srgb, var(--warning, #f59e0b) 14%, transparent)',
+                      color: 'var(--warning, #f59e0b)',
+                      border: '1px solid color-mix(in srgb, var(--warning, #f59e0b) 30%, transparent)'
+                    }}
+                  >
+                    <span>数据延迟</span>
+                    <strong>{mins} 分钟</strong>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>估值时间已 {mins} 分钟未更新，估算净值与涨幅可能不是最新</p>
+                </TooltipContent>
+              </Tooltip>
+            );
+          })()}
           <div className="row" style={{ gap: 4 }}>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -636,15 +676,51 @@ export default function Index({
                 />
               );
             })()}
-            <Stat
-              label="估算净值"
-              value={f.gsz != null && !isNaN(Number(f.gsz)) ? Number(f.gsz).toFixed(4) : (f.gsz ?? '—')}
-            />
-            <Stat
-              label="估算涨幅"
-              value={isNumber(f.gszzl) ? `${f.gszzl > 0 ? '+' : ''}${f.gszzl.toFixed(2)}%` : (f.gszzl ?? '—')}
-              delta={Number(f.gszzl) || 0}
-            />
+            {(() => {
+              const staleMins = isTradingDay ? stalenessMinutes(f.gztime) : null;
+              const stale = isNumber(staleMins) && staleMins >= STALE_THRESHOLD_MIN;
+              return (
+                <div
+                  className="row"
+                  style={{ gap: 0, minWidth: 0, opacity: stale ? 0.55 : 1, transition: 'opacity 0.2s ease' }}
+                  title={stale ? `估值已 ${staleMins} 分钟未更新` : undefined}
+                >
+                  <Stat
+                    label="估算净值"
+                    value={f.gsz != null && !isNaN(Number(f.gsz)) ? Number(f.gsz).toFixed(4) : (f.gsz ?? '—')}
+                  />
+                  {calibration && calibration.samples >= ACCURACY_CALIBRATION_MIN_SAMPLES ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div>
+                          <Stat
+                            label="估算涨幅"
+                            value={
+                              isNumber(f.gszzl) ? `${f.gszzl > 0 ? '+' : ''}${f.gszzl.toFixed(2)}%` : (f.gszzl ?? '—')
+                            }
+                            delta={Number(f.gszzl) || 0}
+                          />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          已按近 {calibration.samples} 日均偏差 {calibration.adjustment > 0 ? '+' : ''}
+                          {calibration.adjustment.toFixed(2)}% 校准：
+                          {calibration.value > 0 ? '+' : ''}
+                          {calibration.value.toFixed(2)}%
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <Stat
+                      label="估算涨幅"
+                      value={isNumber(f.gszzl) ? `${f.gszzl > 0 ? '+' : ''}${f.gszzl.toFixed(2)}%` : (f.gszzl ?? '—')}
+                      delta={Number(f.gszzl) || 0}
+                    />
+                  )}
+                </div>
+              );
+            })()}
           </>
         )}
       </div>

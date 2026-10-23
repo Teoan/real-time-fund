@@ -7,7 +7,14 @@ import timezone from 'dayjs/plugin/timezone';
 import { isArray, isNumber, isPlainObject, isString } from 'lodash';
 
 import { useStorageStore, storageStore } from '../stores';
-import { recordValuation, setValuationSeries as persistValuationSeries } from '../lib/valuationTimeseries';
+import {
+  recordValuation,
+  setValuationSeries as persistValuationSeries,
+  isTimeseriesPersistDegraded,
+  clearTimeseriesPersistDegraded
+} from '../lib/valuationTimeseries';
+import { bindAccuracyStorage, valuationAccuracy } from '../lib/valuationAccuracy';
+import { computeRefreshDelay, getMarketSession } from '../lib/marketSession';
 import { DAILY_EARNINGS_SCOPE_ALL } from '@/app/constants';
 import { asyncPool } from '../lib/asyncHelper';
 import {
@@ -19,9 +26,13 @@ import {
 } from '../api/fund';
 import { TZ } from '../lib/fundHelpers';
 import { getQueryClient } from '../lib/get-query-client';
+import { toast as sonnerToast } from 'sonner';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
+
+// 估值误差历史读写走 storageStore（不直接用 window.localStorage）
+bindAccuracyStorage(storageStore);
 
 const getAddBaseSnapshotFromFund = (fund) => {
   const dwjz = Number(fund?.dwjz);
@@ -49,6 +60,9 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
   const refreshCycleStartRef = useRef(Date.now());
   const refreshingRef = useRef(false);
   const refreshCodesRef = useRef([]);
+  // §3.11：记录上一轮所有基金里最新的 gztime，用于判断上游是否「停止推进」
+  const lastGztimeRef = useRef(null);
+  const stalledRoundsRef = useRef(0);
 
   const scheduleDcaTradesRef = useRef(scheduleDcaTrades);
   const processPendingQueueRef = useRef(processPendingQueue);
@@ -71,10 +85,13 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
       // 如果弹窗拦截同步中，则不允许执行数据刷新，但保持心跳循环
       if (deviceConflictModalOpenRef.current) {
         if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => {
-          const nextCodes = refreshCodesRef.current || [];
-          if (nextCodes.length) refreshAll(nextCodes);
-        }, store.refreshMs);
+        timerRef.current = setTimeout(
+          () => {
+            const nextCodes = refreshCodesRef.current || [];
+            if (nextCodes.length) refreshAll(nextCodes);
+          },
+          computeRefreshDelay({ refreshMs: store.refreshMs, stalledRounds: stalledRoundsRef.current })
+        );
         return;
       }
 
@@ -304,12 +321,37 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
                 }
               }
             } else {
-              const recorded = recordValuation(data.code, { gsz: data.gsz, gztime: data.gztime }, fundDs);
+              const recorded = recordValuation(
+                data.code,
+                { gsz: data.gsz, gszzl: data.gszzl, dwjz: data.dwjz, gztime: data.gztime },
+                fundDs
+              );
               if (recorded) {
                 nextValuationSeries[data.code] = recorded;
                 valuationChanged = true;
               }
             }
+          }
+
+          // 估值误差历史：盘中记「当日估算」，净值公布后回填「确权涨幅」
+          // 两者配对后才有 MAE / 系统偏差 / 方向命中率，用于判断估值本身的可信度。
+          try {
+            const gzDay = isString(data.gztime) ? data.gztime.slice(0, 10) : null;
+            const estimatePct = Number(data.gszzl);
+            if (gzDay && Number.isFinite(estimatePct) && (!data.noValuation || Number.isFinite(Number(data.gsz)))) {
+              valuationAccuracy.recordEstimate({
+                code: data.code,
+                date: gzDay,
+                estimate: estimatePct,
+                source: String(data.valuationSource || fundDs || 'unknown')
+              });
+            }
+            const actualPct = Number(data.zzl);
+            if (isValidDateStr(data.jzrq) && Number.isFinite(actualPct) && data.jzrq >= '2000-01-01') {
+              valuationAccuracy.settleActual({ code: data.code, date: data.jzrq, actual: actualPct });
+            }
+          } catch (e) {
+            // 误差统计失败不得影响刷新主流程
           }
 
           // 收益补齐逻辑
@@ -483,6 +525,34 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
           }
         });
 
+        // §3.10 分时序列写盘降级提示（配额写满时降级为内存，只提示一次，避免每轮都弹）
+        try {
+          if (isTimeseriesPersistDegraded()) {
+            clearTimeseriesPersistDegraded();
+            sonnerToast.warning('分时图数据无法写入本地存储（可能空间已满），本次会话仍会继续绘制');
+          }
+        } catch (e) {
+          // 提示失败不影响刷新
+        }
+
+        // §3.11 停滞检测：取所有基金里最新的 gztime，若连续多轮不推进说明上游估值接口已停更。
+        // 只在盘中有意义（收盘后 gztime 本来就不动），此时刷新延迟退避到 5 分钟。
+        try {
+          const { trading } = getMarketSession();
+          let maxGztime = null;
+          for (const d of updated) {
+            if (isString(d.gztime) && (!maxGztime || d.gztime > maxGztime)) maxGztime = d.gztime;
+          }
+          if (maxGztime && maxGztime !== lastGztimeRef.current) {
+            lastGztimeRef.current = maxGztime;
+            stalledRoundsRef.current = 0;
+          } else if (trading) {
+            stalledRoundsRef.current += 1;
+          }
+        } catch (e) {
+          // 停滞检测失败不影响刷新主流程
+        }
+
         // UI 与存储同步
         if (updated.length > 0) {
           useStorageStore.getState().setFunds((prev) => {
@@ -548,10 +618,14 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
         setRefreshing(false);
         refreshCycleStartRef.current = Date.now();
         if (timerRef.current) clearTimeout(timerRef.current);
+        const nextDelay = computeRefreshDelay({
+          refreshMs: currentRefreshMs,
+          stalledRounds: stalledRoundsRef.current
+        });
         timerRef.current = setTimeout(() => {
           const codes = refreshCodesRef.current || [];
           if (codes.length) refreshAll(codes);
-        }, currentRefreshMs);
+        }, nextDelay);
 
         try {
           if (scheduleDcaTradesRef.current) await scheduleDcaTradesRef.current();
@@ -579,6 +653,8 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
 
   const manualRefresh = useCallback(async () => {
     if (refreshingRef.current) return;
+    // 手动刷新视为用户干预：清零停滞计数，立即恢复常规节奏
+    stalledRoundsRef.current = 0;
     const currentFunds = useStorageStore.getState().funds;
     const codes = Array.from(new Set((isArray(currentFunds) ? currentFunds : []).map((f) => f.code)));
     if (!codes.length) return;
@@ -592,6 +668,8 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
 
     const tick = () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      // 盘前/午休/盘后/夜间自动拉长间隔（见 marketSession），盘中仍按用户设置的 refreshMs
+      const delay = computeRefreshDelay({ refreshMs, stalledRounds: stalledRoundsRef.current });
       timerRef.current = setTimeout(() => {
         const codes = refreshCodesRef.current || [];
         if (codes.length) {
@@ -599,7 +677,7 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
         } else {
           tick();
         }
-      }, refreshMs);
+      }, delay);
     };
 
     tick();

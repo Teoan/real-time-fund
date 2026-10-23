@@ -218,10 +218,18 @@ export function useHoldingProfit({ activeGroupId } = {}) {
         if (!currentNav) return null;
 
         if (canCalcTodayProfit) {
-          const amount = shareForTodayProfit * currentNav;
-          // 估算涨幅
-          const gzChange = Number(fund.gszzl) || 0;
-          profitToday = amount - amount / (1 + gzChange / 100);
+          // 当日收益 = 份额 ×（估算净值 − 确权净值）。
+          // 不能再用「估算市值 − 估算市值 / (1 + 估算涨幅)」：那个增量锚在
+          // 「估算涨幅的起点」上，而持仓金额、累计收益、成本都锚在确权净值上，
+          // 两者相加减得不到一致的「当前市值」，涨跌幅本身也经过了一次四舍五入。
+          const exactNavToday = Number(fund.dwjz);
+          if (Number.isFinite(exactNavToday) && exactNavToday > 0) {
+            profitToday = (currentNav - exactNavToday) * shareForTodayProfit;
+          } else {
+            const amount = shareForTodayProfit * currentNav;
+            const gzChange = Number(fund.gszzl) || 0;
+            profitToday = amount - amount / (1 + gzChange / 100);
+          }
         } else {
           profitToday = null;
         }
@@ -240,6 +248,8 @@ export function useHoldingProfit({ activeGroupId } = {}) {
         amount,
         nav: exactNav,
         profitToday,
+        // 今日收益的口径来源：estimate=估算净值（盘中），confirmed=确权净值（已出净值）
+        profitTodayBasis: profitToday == null ? null : useValuation ? 'estimate' : 'confirmed',
         profitTotal,
         principalToday: isNumber(holding.cost) ? holding.cost * shareForTodayProfit : 0
       };

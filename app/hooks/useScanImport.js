@@ -474,7 +474,12 @@ export function useScanImport({
         const nextSeries = {};
         newFunds.forEach((u) => {
           if (u?.code != null && !u.noValuation && Number.isFinite(Number(u.gsz))) {
-            nextSeries[u.code] = recordValuation(u.code, { gsz: u.gsz, gztime: u.gztime });
+            nextSeries[u.code] = recordValuation(u.code, {
+              gsz: u.gsz,
+              gszzl: u.gszzl,
+              dwjz: u.dwjz,
+              gztime: u.gztime
+            });
           }
         });
         if (Object.keys(nextSeries).length > 0) setValuationSeries((prev) => ({ ...prev, ...nextSeries }));

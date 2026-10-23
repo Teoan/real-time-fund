@@ -26,7 +26,7 @@ import {
   DEFAULT_VALUATION_PERIOD,
   __test__ as historyInternals
 } from '../valuationHistory.js';
-import { computePercentile } from '../valuationEngine.js';
+import { calculateValuationScore, computePercentile, shrinkPercentile } from '../valuationEngine.js';
 import { FUND_CATEGORIES } from '../fundClassifier.js';
 
 // ========== 序列工具 ==========
@@ -143,12 +143,20 @@ describe('getPeriodRange', () => {
 describe('createRanker（长区间分位性能优化）', () => {
   const ref = [5, 1, 9, 3, 7, 3, 11, NaN, 2];
 
-  it('与 computePercentile 口径完全一致（严格小于）', () => {
+  it('与 computePercentile + 分位收缩口径完全一致（严格小于、剔除 <=0）', () => {
     const rank = createRanker(ref);
-    const clean = ref.filter((v) => Number.isFinite(v));
-    for (const v of [0, 1, 2, 3, 5, 6, 9, 11, 12]) {
-      assert.equal(rank(v), computePercentile(clean, v), `value=${v}`);
+    // 参照分布与 fund.js 一致：剔除非法值和非正值
+    const clean = ref.filter((v) => Number.isFinite(v) && v > 0);
+    for (const v of [1, 2, 3, 5, 6, 9, 11, 12]) {
+      const expected = shrinkPercentile(computePercentile(clean, v, { excludeNonPositive: true }), clean.length);
+      assert.equal(rank(v), expected, `value=${v}`);
     }
+  });
+
+  it('当前值 <= 0 → null（亏损分位不得参与评分）', () => {
+    const rank = createRanker(ref);
+    assert.equal(rank(0), null);
+    assert.equal(rank(-3), null);
   });
 
   it('空/非法参照 → 恒返回 null', () => {
@@ -174,7 +182,9 @@ describe('createRanker（长区间分位性能优化）', () => {
 
 /** 构造一只持仓的最小可用历史 */
 const makeStock = ({ code = '600519', weight = 100, market = 'A', peDates, pbDates } = {}) => {
-  const ref = Array.from({ length: 40 }, () => 10); // 参照分布：全部 10 → 分位只由当前值决定
+  // 参照分布：全部 10 → 未收缩的分位只由当前值决定；
+  // 取 120 个样本 = shrinkPercentile 的参照规模，收缩后分位正好是原值的 3/4 + 12.5
+  const ref = Array.from({ length: 120 }, () => 10);
   return {
     perStock: [{ code, weight, market }],
     historyByCode: {
@@ -213,14 +223,14 @@ describe('buildValuationScoreSeries', () => {
     assert.equal(series[1].date, '2026-09-15');
     // 估值从参照分布最低升到最高 → 评分上升
     assert.ok(series[1].score > series[0].score, `${series[1].score} 应大于 ${series[0].score}`);
-    // 分位随值变化：10 对全 10 → 0 分位；30 对全 10 → 100 分位
-    assert.equal(Math.round(series[0].metrics.pePercentile), 0);
-    assert.equal(Math.round(series[1].metrics.pePercentile), 100);
+    // 分位随值变化：10 对全 10 → 0 分位（收缩到 25）；30 对全 10 → 100 分位（收缩到 75）
+    assert.equal(Math.round(series[0].metrics.pePercentile), 25);
+    assert.equal(Math.round(series[1].metrics.pePercentile), 75);
   });
 
   it('as-of 向前填充：缺数据的日期沿用上一有效值', () => {
     // 两只股票：A 在 09-01/09-10 有数据，B 只在 09-05 有数据
-    const ref = Array.from({ length: 40 }, () => 10);
+    const ref = Array.from({ length: 120 }, () => 10);
     const series = buildValuationScoreSeries({
       perStock: [
         { code: 'A', weight: 50, market: 'A' },
@@ -250,12 +260,12 @@ describe('buildValuationScoreSeries', () => {
     // 09-05 时 A 仍为 10（向前填充），覆盖权重为 A+B
     assert.equal(series[1].coverage, 100);
     const pePct = series[1].metrics.pePercentile;
-    // A 的 10 对 ref(全10) → 0；B 的 20 → 100；等权 → 50
+    // A 的 10 对 ref(全10) → 收缩后 25；B 的 20 → 收缩后 75；等权 → 50
     assert.equal(Math.round(pePct), 50);
   });
 
   it('PE 走 E/P 加权倒数法', () => {
-    const ref = Array.from({ length: 40 }, () => 10);
+    const ref = Array.from({ length: 120 }, () => 10);
     const series = buildValuationScoreSeries({
       perStock: [
         { code: 'A', weight: 50, market: 'A' },
@@ -274,7 +284,7 @@ describe('buildValuationScoreSeries', () => {
     assert.ok(Math.abs(series[0].metrics.pe - 13.333) < 0.01, `实际 ${series[0].metrics.pe}`);
   });
 
-  it('参照样本不足（<30）→ 该指标不计入，评分仍可产出', () => {
+  it('参照样本不足（<60）→ 该指标不计入，评分仍可产出', () => {
     const series = buildValuationScoreSeries({
       perStock: [{ code: 'A', weight: 100, market: 'A' }],
       historyByCode: {
@@ -297,7 +307,7 @@ describe('buildValuationScoreSeries', () => {
   });
 
   it('季度指标（ROE/增速）作为区间常量带入每一天', () => {
-    const ref = Array.from({ length: 40 }, () => 10);
+    const ref = Array.from({ length: 120 }, () => 10);
     const series = buildValuationScoreSeries({
       perStock: [{ code: 'A', weight: 100, market: 'A' }],
       historyByCode: {
@@ -323,6 +333,58 @@ describe('buildValuationScoreSeries', () => {
     }
   });
 
+  it('末点分数与首屏同源（fundamentals 必须带 peg / 股息率）', () => {
+    const ref = Array.from({ length: 120 }, () => 10);
+    const fundamentals = {
+      roe: 15,
+      epsGrowth: 12,
+      revenueGrowth: 10,
+      peg: 1.1,
+      dividendYield: 3.2,
+      dividendPayoutRatio: 35
+    };
+    const series = buildValuationScoreSeries({
+      perStock: [{ code: 'A', weight: 100, market: 'A' }],
+      historyByCode: {
+        A: {
+          pe: [{ date: '2026-09-01', value: 12 }],
+          pb: [{ date: '2026-09-01', value: 1.5 }],
+          ps: []
+        }
+      },
+      referenceByCode: { A: { pe: ref, pb: ref, ps: null } },
+      fundamentals,
+      category: FUND_CATEGORIES.BROAD_INDEX,
+      from: '2026-09-01',
+      to: '2026-09-30'
+    });
+    assert.equal(series.length, 1);
+    // 首屏直接拿同一份指标算出来的分数
+    const headline = calculateValuationScore(
+      { ...series[0].metrics, pe: 12, pb: 1.5, ...fundamentals },
+      FUND_CATEGORIES.BROAD_INDEX
+    );
+    assert.equal(series[0].score, headline.score, '走势图末点必须等于首屏分数');
+  });
+
+  it('成长型分类：缺 peg 的末点会与首屏分叉（回归护栏）', () => {
+    const ref = Array.from({ length: 120 }, () => 10);
+    const base = {
+      perStock: [{ code: 'A', weight: 100, market: 'A' }],
+      historyByCode: { A: { pe: [{ date: '2026-09-01', value: 12 }], pb: [], ps: [] } },
+      referenceByCode: { A: { pe: ref } },
+      category: FUND_CATEGORIES.GROWTH,
+      from: '2026-09-01',
+      to: '2026-09-30'
+    };
+    const withPeg = buildValuationScoreSeries({ ...base, fundamentals: { peg: 0.7 } });
+    const withoutPeg = buildValuationScoreSeries({ ...base, fundamentals: {} });
+    // peg 权重 29%：带上它（低估 8 分）后末点必须明显低于不带
+    assert.ok(withPeg[0].score < withoutPeg[0].score, `${withPeg[0].score} vs ${withoutPeg[0].score}`);
+    assert.equal(withoutPeg[0].metrics.peg, null);
+    assert.equal(withPeg[0].metrics.peg, 0.7);
+  });
+
   it('无持仓 / 无历史 → 空序列', () => {
     const base = {
       referenceByCode: {},
@@ -341,8 +403,54 @@ describe('buildValuationScoreSeries', () => {
     );
   });
 
+  it('美股持仓（无估值历史）按当前值常量计入，不与首屏分叉', () => {
+    const ref = Array.from({ length: 120 }, () => 10);
+    const series = buildValuationScoreSeries({
+      perStock: [
+        { code: 'A', weight: 50, market: 'A' },
+        { code: 'AAPL', weight: 50, market: 'US' }
+      ],
+      historyByCode: {
+        A: {
+          pe: [
+            { date: '2026-09-01', value: 20 },
+            { date: '2026-09-15', value: 20 }
+          ]
+        }
+      },
+      referenceByCode: { A: { pe: ref } },
+      // 美股没有历史源，只能按当前值当常量
+      quoteByCode: { AAPL: { pe: 10 } },
+      category: FUND_CATEGORIES.BROAD_INDEX,
+      from: '2026-09-01',
+      to: '2026-09-30'
+    });
+    assert.equal(series.length, 2);
+    // E/P 加权：(0.5/20 + 0.5/10) = 0.075 → 13.33（若美股被丢掉会得 20）
+    assert.equal(series[1].metrics.pe, 13.33);
+  });
+
+  it('有历史但当日无数据 → 不拿当前值回填（防前视偏差）', () => {
+    const ref = Array.from({ length: 120 }, () => 10);
+    const series = buildValuationScoreSeries({
+      perStock: [{ code: 'A', weight: 100, market: 'A' }],
+      historyByCode: {
+        A: { pe: [{ date: '2026-09-10', value: 20 }] }
+      },
+      referenceByCode: { A: { pe: ref } },
+      // 当前更便宜，但 9 月上旬还没有数据，不能被搬回去
+      quoteByCode: { A: { pe: 8 } },
+      category: FUND_CATEGORIES.BROAD_INDEX,
+      from: '2026-09-01',
+      to: '2026-09-30'
+    });
+    assert.equal(series.length, 1);
+    assert.equal(series[0].date, '2026-09-10');
+    assert.equal(series[0].metrics.pe, 20);
+  });
+
   it('权重为 0 的持仓被忽略', () => {
-    const ref = Array.from({ length: 40 }, () => 10);
+    const ref = Array.from({ length: 120 }, () => 10);
     const series = buildValuationScoreSeries({
       perStock: [
         { code: 'A', weight: 0, market: 'A' },
@@ -430,6 +538,6 @@ describe('summarizeValuationSeries', () => {
 
 describe('内部常量', () => {
   it('分位样本下限与 fund.js 保持一致', () => {
-    assert.equal(historyInternals.MIN_REFERENCE_SAMPLES, 30);
+    assert.equal(historyInternals.MIN_REFERENCE_SAMPLES, 60);
   });
 });

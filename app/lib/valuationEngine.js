@@ -177,6 +177,25 @@ export function psToScore(ps) {
 }
 
 /**
+ * 股息支付率评分（原始值阈值映射）
+ *
+ * 支付率与"贵不贵"不是单调关系：分红太少（留存逻辑不明）与分红过多（不可持续、
+ * 或股价已跌到股息率高企）都偏贵，40%~70% 最健康。
+ * 数值单位为 %（0-100 以上，>100% 表示分红超过当年利润）。
+ *
+ * @param {number} payoutPct - 股息支付率（%）
+ * @returns {number|null} 0-100 分
+ */
+export function dividendPayoutRatioToScore(payoutPct) {
+  if (!Number.isFinite(payoutPct) || payoutPct < 0) return null;
+  if (payoutPct < 20) return 70; // 几乎不分红，红利策略视角偏贵
+  if (payoutPct < 40) return 50;
+  if (payoutPct <= 70) return 30; // 健康区间
+  if (payoutPct <= 100) return 45;
+  return 90; // 超过当年利润，不可持续
+}
+
+/**
  * ROE 评分（原始值阈值映射，行业无关的粗略口径）
  * ROE 越高 = 盈利能力越强 = 相对越"便宜"（分越低）
  * 数值单位为 %
@@ -246,6 +265,9 @@ export function normalizeToScore(key, value, indicatorDef) {
   if (key === 'roe') {
     return roeToScore(value);
   }
+  if (key === 'dividendPayoutRatio') {
+    return dividendPayoutRatioToScore(value);
+  }
 
   // 其他指标暂时返回 null（需要历史分位才能评分）
   // 后续可扩展：fcf、grossMargin 等
@@ -253,16 +275,36 @@ export function normalizeToScore(key, value, indicatorDef) {
 }
 
 /**
+ * 分位收缩的参照样本数（经验贝叶斯式向 50 分位收缩的强度）。
+ *
+ * 30 个样本算出的分位，标准误约 9 个百分点，直接把两端标成「极度低估/极度高估」
+ * 噪声太大；把分位与 50 按 n:(k) 混合，n 越大越接近真实分位：
+ *   n=60  → 权重 0.33，30 分位 → 43.3
+ *   n=250 → 权重 0.68，30 分位 → 36.4
+ *   n=1212（A 股近 5 年）→ 权重 0.91，30 分位 → 31.8
+ * 即：样本越少越保守，但不会把有效样本彻底拉平。
+ */
+export const PERCENTILE_SHRINK_REFERENCE = 120;
+
+/**
  * 计算一组数值的百分位
  * @param {number[]} values - 历史数值数组
  * @param {number} current - 当前值
+ * @param {{ excludeNonPositive?: boolean }} [options]
+ *        excludeNonPositive：剔除 <= 0 的样本。
+ *        PE/PB/PS 必须开启——亏损股的负 PE 会排在分布最左端，
+ *        使「亏损」被算成「极度低估」，是完全反向的信号。
  * @returns {number} 0-100 的百分位（当前值在历史中的位置）
  */
-export function computePercentile(values, current) {
+export function computePercentile(values, current, options = {}) {
   if (!Array.isArray(values) || values.length === 0) return null;
   if (!Number.isFinite(current)) return null;
+  const excludeNonPositive = options.excludeNonPositive === true;
+  // 亏损/负净资产（PE/PB/PS <= 0）的分位没有经济含义：负值永远排在分布最左端，
+  // 会被读成「极度低估」。守卫不依赖 excludeNonPositive，默认生效。
+  if (current <= 0) return null;
 
-  const valid = values.filter((v) => Number.isFinite(v));
+  const valid = values.filter((v) => Number.isFinite(v) && (!excludeNonPositive || v > 0));
   if (valid.length === 0) return null;
 
   let below = 0;
@@ -270,6 +312,40 @@ export function computePercentile(values, current) {
     if (v < current) below++;
   }
   return (below / valid.length) * 100;
+}
+
+/**
+ * 分位收缩：把「小样本分位」向 50 拉近，样本越多越接近原始分位。
+ *
+ * @param {number} percentile - 0-100 原始分位
+ * @param {number} sampleCount - 参照样本数
+ * @param {number} [referenceSize] - 收缩强度 k
+ * @returns {number|null} 0-100 收缩后的分位
+ */
+export function shrinkPercentile(percentile, sampleCount, referenceSize = PERCENTILE_SHRINK_REFERENCE) {
+  if (!Number.isFinite(percentile)) return null;
+  const n = Number(sampleCount);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const k = Number.isFinite(referenceSize) && referenceSize > 0 ? referenceSize : PERCENTILE_SHRINK_REFERENCE;
+  const shrunk = (n * percentile + k * 50) / (n + k);
+  return Math.max(0, Math.min(100, shrunk));
+}
+
+/**
+ * 判断某个估值倍数是否处于「亏损/无意义」区间（PE/PB/PS <= 0）。
+ *
+ * 亏损时 PE 无经济含义，其历史分位也就不能用来判断贵贱。
+ *
+ * @param {object} metrics
+ * @param {string} key - 基础指标 key（pe/pb/ps），不是 *Percentile
+ * @returns {boolean}
+ */
+export function isLossMakingMetric(metrics, key) {
+  if (key !== 'pe' && key !== 'pb' && key !== 'ps') return false;
+  const raw = metrics?.[key];
+  if (raw == null || raw === '') return false;
+  const v = Number(raw);
+  return Number.isFinite(v) && v <= 0;
 }
 
 /**
@@ -301,30 +377,38 @@ export function calculateValuationScore(metrics, classification) {
     const rawValue = metrics?.[key];
     const indicatorDef = getIndicatorDef(key);
 
+    // 亏损守卫：PE/PB/PS <= 0 时，其历史分位会把「亏损」读成「极度低估」，
+    // 因此分位类评分一律作废（绝对值路径本来就有 <= 0 → null 的守卫）。
+    const baseKey = key.endsWith('Percentile') ? key.slice(0, -'Percentile'.length) : key;
+    const lossGuarded = isLossMakingMetric(metrics, baseKey);
+
     let score;
-    if (rawValue == null) {
-      score = null;
-    } else if (key === 'peg') {
-      score = pegToScore(rawValue, pegThresholds);
+    // 实际参与评分的是分位还是原始值：UI 要据此说明「这一列用的是历史分位（N 个样本）」
+    let scoredBy = 'raw';
+    if (key === 'peg') {
+      score = rawValue == null ? null : pegToScore(rawValue, pegThresholds);
     } else if (key.endsWith('Percentile')) {
       // 分位数直接映射
-      score = normalizeToScore(key, rawValue, indicatorDef);
-    } else if (usePercentile && rawValue != null) {
+      score = rawValue == null || lossGuarded ? null : normalizeToScore(key, rawValue, indicatorDef);
+    } else if (usePercentile) {
       // 标记为 usePercentile 的指标优先用历史分位评分；
       // 分位数据缺失时，仅当规则项显式声明 absolute: true 才回退到原始值阈值评分。
       // 显式开关是必要的：PE/PB/PS 的阈值映射同时被美股规则使用，
       // 若此处无条件回退，会把「依赖历史分位」的 A 股宽基等规则一并改写。
+      // 注意：这里不能因为 metrics[key] 缺失就提前跳过 —— 有了历史分位时，
+      // 原始值（如 pe 本身）只是回退用，分位已足够评分。
       const percentileKey = `${key}Percentile`;
       const percentileValue = metrics?.[percentileKey];
-      if (percentileValue != null) {
+      if (percentileValue != null && !lossGuarded) {
         score = normalizeToScore(percentileKey, percentileValue, indicatorDef);
-      } else if (absolute === true) {
+        scoredBy = 'percentile';
+      } else if (absolute === true && rawValue != null) {
         score = normalizeToScore(key, rawValue, indicatorDef);
       } else {
         score = null;
       }
     } else {
-      score = normalizeToScore(key, rawValue, indicatorDef);
+      score = rawValue == null ? null : normalizeToScore(key, rawValue, indicatorDef);
     }
 
     details.push({
@@ -333,7 +417,11 @@ export function calculateValuationScore(metrics, classification) {
       rawValue: rawValue ?? null,
       score,
       weight,
-      contributed: score != null
+      contributed: score != null,
+      // 供 UI 解释「有数据但没参与评分」的原因（如亏损股的 PE 分位）
+      lossGuarded: lossGuarded && score == null,
+      // percentile = 这一列用的是历史分位（而不是绝对阈值）
+      scoredBy
     });
 
     if (score != null) {
@@ -347,6 +435,7 @@ export function calculateValuationScore(metrics, classification) {
       score: null,
       rating: scoreToRating(null).label,
       confidence: 0,
+      indicatorCoverage: 0,
       classification,
       details
     };
@@ -354,14 +443,17 @@ export function calculateValuationScore(metrics, classification) {
 
   const finalScore = totalScore / totalWeight;
   const rating = scoreToRating(finalScore);
-  // 置信度 = 实际参与计算的权重占比
-  const confidence = Math.round(totalWeight * 100);
+  // 指标覆盖率 = 实际参与计算的权重占比（规则权重已归一，满覆盖即 100%）
+  // 注意：这只是「置信度」的一个因子，调用方还需乘上持仓覆盖率与财报时效性
+  // （见 app/api/fund.js 的 confidenceOfScore）。
+  const indicatorCoverage = Math.round(totalWeight * 100);
 
   return {
     score: Math.round(finalScore * 10) / 10,
     rating: rating.label,
     ratingColor: rating.color,
-    confidence,
+    confidence: indicatorCoverage,
+    indicatorCoverage,
     classification,
     details
   };
@@ -386,6 +478,7 @@ export function extractMetricsFromHoldingsValuation(holdingsValuation) {
     epsGrowth: m.epsGrowth ?? null,
     revenueGrowth: m.revenueGrowth ?? null,
     dividendYield: m.dividendYield ?? null,
+    dividendPayoutRatio: m.dividendPayoutRatio ?? null,
     roe: m.roe ?? null
   };
 }
@@ -393,6 +486,7 @@ export function extractMetricsFromHoldingsValuation(holdingsValuation) {
 export const __test__ = {
   pegToScore,
   dividendYieldToScore,
+  dividendPayoutRatioToScore,
   epsGrowthToScore,
   revenueGrowthToScore,
   peToScore,
@@ -401,6 +495,9 @@ export const __test__ = {
   roeToScore,
   normalizeToScore,
   computePercentile,
+  shrinkPercentile,
+  isLossMakingMetric,
   scoreToRating,
+  PERCENTILE_SHRINK_REFERENCE,
   RATINGS
 };

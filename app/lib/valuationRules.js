@@ -56,27 +56,49 @@ const DEFAULT_PEG_THRESHOLDS = { low: 0.8, fair: 1.2, slightlyHigh: 1.8, high: 2
 
 /**
  * 各类型估值规则
+ *
+ * 三条约定（2026-03 审计修复，勿回退）：
+ *
+ * 1. **一个指标只出现一次**。`{ key: 'pe', usePercentile: true }` 与独立的
+ *    `{ key: 'pePercentile' }` 指向同一份数据（引擎的 usePercentile 分支读的就是
+ *    `${key}Percentile`），同时写入会让同一信息被计两次权重——宽基曾因此把 PE 分位
+ *    算成 50%。要表达「分位优先、绝对值兜底」，用 `usePercentile + absolute`。
+ *
+ * 2. **只允许列出有数据源的指标**。当前 `fund.js` 实际产出的指标只有
+ *    pe/pb/ps/peg/epsGrowth/revenueGrowth/dividendYield/roe/dividendPayoutRatio
+ *    （payout 由 dividendYield × pe 派生）+ 分位型 pePercentile/pbPercentile/psPercentile。
+ *    其余指标（earningsRevision、fcf、grossMargin、fcfMargin、roic、evSales、
+ *    evEbitda、nplRatio、capitalAdequacy、dividendYieldPercentile）没有任何数据源，
+ *    列在 indicators 里只会永久拉低碳信度的理论上限（债券曾只有 50%）。
+ *    这些指标改放 `pendingIndicators`，补到数据源后再挪回 indicators 并重新归一。
+ *
+ * 3. **`indicators` 权重之和必须为 1**。这样「指标覆盖率 100%」才等于「数据齐全」，
+ *    置信度才只是数据质量的函数，而不是分类的函数。
  */
 const VALUATION_RULES = {
   // ========== 宽基指数 ==========
+  // 原规则：pePercentile 0.25 + pe(usePercentile) 0.25 → PE 分位被双计成 50%，
+  // 且 dividendYieldPercentile 0.15 无数据源。合并为单列 pe 0.35（分位驱动，
+  // 缺分位时不参与评分，不用绝对值兜底），无源的股息率分位换成有源的股息率绝对值。
   [FUND_CATEGORIES.BROAD_INDEX]: {
     name: '宽基指数',
     indicators: [
-      { key: 'pePercentile', weight: 0.25 },
-      { key: 'pbPercentile', weight: 0.15 },
-      { key: 'dividendYieldPercentile', weight: 0.15 },
-      { key: 'pe', weight: 0.25, usePercentile: true },
-      { key: 'roe', weight: 0.1 },
-      { key: 'epsGrowth', weight: 0.1 }
-    ]
+      { key: 'pe', weight: 0.35, usePercentile: true },
+      { key: 'pbPercentile', weight: 0.2 },
+      { key: 'dividendYield', weight: 0.15 },
+      { key: 'roe', weight: 0.15 },
+      { key: 'epsGrowth', weight: 0.15 }
+    ],
+    pendingIndicators: [{ key: 'dividendYieldPercentile', weight: 0.15, reason: '股息率历史序列无数据源' }]
   },
 
   // ========== 红利/高股息 ==========
+  // 原规则：dividendYieldPercentile 0.3（无数据源）+ dividendYield 0.2(usePercentile)
+  // 同一份股息率数据两次计权。合并为单列 dividendYield 0.5，分位优先、绝对值兜底。
   [FUND_CATEGORIES.DIVIDEND]: {
     name: '红利/高股息',
     indicators: [
-      { key: 'dividendYieldPercentile', weight: 0.3 },
-      { key: 'dividendYield', weight: 0.2, usePercentile: true, absolute: true },
+      { key: 'dividendYield', weight: 0.5, usePercentile: true, absolute: true },
       { key: 'pbPercentile', weight: 0.2 },
       { key: 'pePercentile', weight: 0.15 },
       { key: 'roe', weight: 0.1 },
@@ -85,35 +107,39 @@ const VALUATION_RULES = {
   },
 
   // ========== 成长型 ==========
+  // earningsRevision（盈利预期修正）无数据源 → pending，其余按原比例归一。
   [FUND_CATEGORIES.GROWTH]: {
     name: '成长型',
     indicators: [
-      { key: 'peg', weight: 0.25 },
-      { key: 'pePercentile', weight: 0.15 },
-      { key: 'epsGrowth', weight: 0.2 },
-      { key: 'revenueGrowth', weight: 0.1 },
-      { key: 'roe', weight: 0.15 },
-      { key: 'earningsRevision', weight: 0.15 }
+      { key: 'peg', weight: 0.29 },
+      { key: 'pePercentile', weight: 0.18 },
+      { key: 'epsGrowth', weight: 0.24 },
+      { key: 'revenueGrowth', weight: 0.12 },
+      { key: 'roe', weight: 0.17 }
     ],
+    pendingIndicators: [{ key: 'earningsRevision', weight: 0.15, reason: '卖方预期修正数据无源' }],
     pegThresholds: DEFAULT_PEG_THRESHOLDS
   },
 
   // ========== 科技/AI ==========
   // 注：PE/PB 历史分位是港股科技基金唯一可得的指标（港股无 PEG、且市销率历史不可得），
   // 若 TECH 规则只保留 psPercentile/peg/营收增速等，港股科技基金将无法出分。
-  // 因此纳入 pePercentile / pbPercentile，并从本就没有数据源的指标上等量下调权重。
+  // 因此纳入 pePercentile / pbPercentile，并从本就没有数据源的指标上等量下调权重
+  // （grossMargin/fcfMargin/roic/evSales 已移入 pendingIndicators）。
   [FUND_CATEGORIES.TECH]: {
     name: '科技/AI',
     indicators: [
-      { key: 'psPercentile', weight: 0.2 },
-      { key: 'pePercentile', weight: 0.15 },
-      { key: 'pbPercentile', weight: 0.1 },
-      { key: 'peg', weight: 0.15 },
-      { key: 'revenueGrowth', weight: 0.1 },
-      { key: 'grossMargin', weight: 0.05 },
-      { key: 'fcfMargin', weight: 0.05 },
-      { key: 'roic', weight: 0.05 },
-      { key: 'evSales', weight: 0.15 }
+      { key: 'psPercentile', weight: 0.29 },
+      { key: 'pePercentile', weight: 0.21 },
+      { key: 'pbPercentile', weight: 0.14 },
+      { key: 'peg', weight: 0.22 },
+      { key: 'revenueGrowth', weight: 0.14 }
+    ],
+    pendingIndicators: [
+      { key: 'grossMargin', weight: 0.05, reason: '跨行业不可比，无稳定数据源' },
+      { key: 'fcfMargin', weight: 0.05, reason: '无数据源' },
+      { key: 'roic', weight: 0.05, reason: '无数据源' },
+      { key: 'evSales', weight: 0.15, reason: 'EV 无数据源' }
     ],
     pegThresholds: { low: 1.0, fair: 1.5, slightlyHigh: 2.0, high: 3.0 }
   },
@@ -122,14 +148,14 @@ const VALUATION_RULES = {
   [FUND_CATEGORIES.PHARMA]: {
     name: '医药',
     indicators: [
-      { key: 'pePercentile', weight: 0.2 },
-      { key: 'psPercentile', weight: 0.15 },
-      { key: 'peg', weight: 0.2 },
-      { key: 'roe', weight: 0.1 },
-      { key: 'epsGrowth', weight: 0.15 },
-      { key: 'revenueGrowth', weight: 0.1 },
-      { key: 'fcf', weight: 0.1 }
+      { key: 'pePercentile', weight: 0.22 },
+      { key: 'psPercentile', weight: 0.17 },
+      { key: 'peg', weight: 0.22 },
+      { key: 'roe', weight: 0.11 },
+      { key: 'epsGrowth', weight: 0.17 },
+      { key: 'revenueGrowth', weight: 0.11 }
     ],
+    pendingIndicators: [{ key: 'fcf', weight: 0.1, reason: '自由现金流无数据源' }],
     pegThresholds: { low: 0.8, fair: 1.2, slightlyHigh: 1.8, high: 2.5 }
   },
 
@@ -137,13 +163,13 @@ const VALUATION_RULES = {
   [FUND_CATEGORIES.CONSUMER]: {
     name: '消费',
     indicators: [
-      { key: 'pePercentile', weight: 0.3 },
-      { key: 'peg', weight: 0.2 },
-      { key: 'pbPercentile', weight: 0.1 },
-      { key: 'roe', weight: 0.15 },
-      { key: 'epsGrowth', weight: 0.15 },
-      { key: 'fcf', weight: 0.1 }
+      { key: 'pePercentile', weight: 0.33 },
+      { key: 'peg', weight: 0.22 },
+      { key: 'pbPercentile', weight: 0.11 },
+      { key: 'roe', weight: 0.17 },
+      { key: 'epsGrowth', weight: 0.17 }
     ],
+    pendingIndicators: [{ key: 'fcf', weight: 0.1, reason: '自由现金流无数据源' }],
     pegThresholds: { low: 0.8, fair: 1.2, slightlyHigh: 1.8, high: 2.5 }
   },
 
@@ -151,12 +177,14 @@ const VALUATION_RULES = {
   [FUND_CATEGORIES.FINANCE]: {
     name: '金融',
     indicators: [
-      { key: 'pbPercentile', weight: 0.3 },
-      { key: 'roe', weight: 0.25 },
-      { key: 'dividendYield', weight: 0.2, usePercentile: true, absolute: true },
-      { key: 'pePercentile', weight: 0.1 },
-      { key: 'nplRatio', weight: 0.1 },
-      { key: 'capitalAdequacy', weight: 0.05 }
+      { key: 'pbPercentile', weight: 0.35 },
+      { key: 'roe', weight: 0.3 },
+      { key: 'dividendYield', weight: 0.23, usePercentile: true, absolute: true },
+      { key: 'pePercentile', weight: 0.12 }
+    ],
+    pendingIndicators: [
+      { key: 'nplRatio', weight: 0.1, reason: '不良率需银行财报明细，无数据源' },
+      { key: 'capitalAdequacy', weight: 0.05, reason: '资本充足率无数据源' }
     ]
   },
 
@@ -164,13 +192,13 @@ const VALUATION_RULES = {
   [FUND_CATEGORIES.CYCLICAL]: {
     name: '周期',
     indicators: [
-      { key: 'pbPercentile', weight: 0.2 },
-      { key: 'evEbitda', weight: 0.2 },
-      { key: 'pePercentile', weight: 0.15 },
-      { key: 'epsGrowth', weight: 0.15 },
-      { key: 'roe', weight: 0.1 },
-      { key: 'psPercentile', weight: 0.2 }
+      { key: 'pbPercentile', weight: 0.25 },
+      { key: 'psPercentile', weight: 0.25 },
+      { key: 'pePercentile', weight: 0.2 },
+      { key: 'epsGrowth', weight: 0.2 },
+      { key: 'roe', weight: 0.1 }
     ],
+    pendingIndicators: [{ key: 'evEbitda', weight: 0.2, reason: 'EV/EBITDA 无数据源' }],
     note: '周期股 PE 低可能是景气高峰，需结合 PB 和盈利中枢判断'
   },
 
@@ -206,23 +234,23 @@ const VALUATION_RULES = {
   [FUND_CATEGORIES.REAL_ESTATE]: {
     name: '地产',
     indicators: [
-      { key: 'pbPercentile', weight: 0.3 },
-      { key: 'pePercentile', weight: 0.15 },
-      { key: 'dividendYield', weight: 0.15, usePercentile: true, absolute: true },
-      { key: 'evEbitda', weight: 0.2 },
-      { key: 'roe', weight: 0.1 },
-      { key: 'psPercentile', weight: 0.1 }
-    ]
+      { key: 'pbPercentile', weight: 0.38 },
+      { key: 'pePercentile', weight: 0.19 },
+      { key: 'dividendYield', weight: 0.19, usePercentile: true, absolute: true },
+      { key: 'roe', weight: 0.12 },
+      { key: 'psPercentile', weight: 0.12 }
+    ],
+    pendingIndicators: [{ key: 'evEbitda', weight: 0.2, reason: 'EV/EBITDA 无数据源' }]
   },
 
   // ========== REITs ==========
+  // 原规则 dividendYield 0.35(usePercentile) 与 dividendYieldPercentile 0.25 双计 → 合并为 0.47。
   [FUND_CATEGORIES.REITS]: {
     name: 'REITs',
     indicators: [
-      { key: 'dividendYield', weight: 0.35, usePercentile: true, absolute: true },
-      { key: 'dividendYieldPercentile', weight: 0.25 },
-      { key: 'pbPercentile', weight: 0.2 },
-      { key: 'pePercentile', weight: 0.2 }
+      { key: 'dividendYield', weight: 0.47, usePercentile: true, absolute: true },
+      { key: 'pbPercentile', weight: 0.27 },
+      { key: 'pePercentile', weight: 0.26 }
     ]
   },
 
@@ -283,12 +311,11 @@ const VALUATION_RULES = {
   },
 
   // ========== 债券 ==========
+  // 债券基金本就没有 PE/PB，股息率（份额分红率）是唯一可用信号：单列 100%，
+  // 缺分位时回退到绝对值阈值——原规则把 50% 押在无源的 dividendYieldPercentile 上。
   [FUND_CATEGORIES.BOND]: {
     name: '债券',
-    indicators: [
-      { key: 'dividendYield', weight: 0.5, usePercentile: true, absolute: true },
-      { key: 'dividendYieldPercentile', weight: 0.5 }
-    ],
+    indicators: [{ key: 'dividendYield', weight: 1, usePercentile: true, absolute: true }],
     note: '债券基金主要看到期收益率/分红率，不适用 PE/PB 估值'
   },
 
@@ -315,6 +342,58 @@ export function getValuationRule(category) {
 }
 
 /**
+ * 获取指定分类「已声明但暂无数据源」的指标
+ *
+ * 这些指标不参与评分、不计入置信度分母，只作为待补清单存在。
+ *
+ * @param {string} category
+ * @returns {Array<{key: string, weight: number, reason: string}>}
+ */
+export function getPendingIndicators(category) {
+  const rule = getValuationRule(category);
+  return Array.isArray(rule.pendingIndicators) ? rule.pendingIndicators : [];
+}
+
+/**
+ * 校验规则表的三条约定（一个指标只出现一次 / 权重和为 1 / 不出现无源指标）。
+ * 供单测与开发期自检使用。
+ *
+ * @returns {Array<string>} 问题描述列表，空数组表示全部通过
+ */
+export function validateValuationRules() {
+  const problems = [];
+  const LIVE_METRICS = new Set([
+    'pe',
+    'pb',
+    'ps',
+    'peg',
+    'epsGrowth',
+    'revenueGrowth',
+    'dividendYield',
+    'roe',
+    'dividendPayoutRatio',
+    'pePercentile',
+    'pbPercentile',
+    'psPercentile'
+  ]);
+  for (const [category, rule] of Object.entries(VALUATION_RULES)) {
+    const indicators = Array.isArray(rule.indicators) ? rule.indicators : [];
+    const seen = new Set();
+    let total = 0;
+    for (const item of indicators) {
+      if (seen.has(item.key)) problems.push(`${category}: 指标 ${item.key} 重复出现`);
+      seen.add(item.key);
+      if (!LIVE_METRICS.has(item.key))
+        problems.push(`${category}: 指标 ${item.key} 无数据源，应移入 pendingIndicators`);
+      if (!Number.isFinite(item.weight) || item.weight <= 0) problems.push(`${category}: 指标 ${item.key} 权重非法`);
+      total += Number(item.weight) || 0;
+    }
+    if (Math.abs(total - 1) > 0.001) problems.push(`${category}: 权重之和 ${total} ≠ 1`);
+  }
+  return problems;
+}
+
+/**
  * 获取指标定义
  * @param {string} key
  * @returns {object|undefined}
@@ -324,4 +403,4 @@ export function getIndicatorDef(key) {
 }
 
 export { VALUATION_RULES, INDICATOR_DEFS, DEFAULT_PEG_THRESHOLDS };
-export const __test__ = { INDICATOR_DEFS, VALUATION_RULES };
+export const __test__ = { INDICATOR_DEFS, VALUATION_RULES, validateValuationRules };

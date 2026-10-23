@@ -5,6 +5,13 @@ import { useState, useEffect, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast as sonnerToast } from 'sonner';
 import { fetchFundValuationBySource, fetchBestValuationSource, fetchFundBestSource, isQdiiFund } from '@/app/api/fund';
+import {
+  valuationAccuracy,
+  ACCURACY_MIN_SAMPLES,
+  ACCURACY_WINDOW,
+  ACCURACY_BIAS_THRESHOLD,
+  ACCURACY_CALIBRATION_MIN_SAMPLES
+} from '@/app/lib/valuationAccuracy';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
@@ -40,6 +47,10 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
   const [isYesterdayAccuracy, setIsYesterdayAccuracy] = useState(false);
   const [isTodayAccuracy, setIsTodayAccuracy] = useState(false);
   const [accuracyDiffs, setAccuracyDiffs] = useState({});
+  // 本地累计的估值误差统计（不是单日最小误差）：样本够才展示
+  const [localAccuracy, setLocalAccuracy] = useState(null);
+  // 三源估算涨幅的极差：分歧大说明今天各源看法不一致，「最准」标签的参考价值随之下降
+  const [sourceSpread, setSourceSpread] = useState(null);
 
   // 是否为 QDII 基金（决定是否展示数据源 4）
   const [isQdii, setIsQdii] = useState(false);
@@ -91,6 +102,7 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
     setIsTodayAccuracy(false);
     setAccuracyDiffs({});
     setIsQdii(false);
+    setSourceSpread(null);
 
     // 只要有实际涨跌幅，就尝试进行比对
     const actualZzl = isNumber(fund.zzl) && Number.isFinite(fund.zzl) ? fund.zzl : null;
@@ -99,6 +111,10 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
     isQdiiFund(fund.code).then((qdii) => {
       if (!isMounted) return;
       setIsQdii(qdii);
+      // 本地历史误差：盘中记估算、净值出来后回填确权，跨日累积（见 app/lib/valuationAccuracy.js）
+      try {
+        setLocalAccuracy(valuationAccuracy.getSummary(fund.code));
+      } catch {}
 
       // 并行获取实时估算值（用于展示）和历史最准数据源（用于标签判断）
       const estimatePromises = [
@@ -124,6 +140,12 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
         const e3 = formatGszzlEstimate(v3?.gszzl);
         const e4 = qdii ? formatGszzlEstimate(v4?.gszzl) : null;
         setEstimates({ 1: e1, 2: e2, 3: e3, 4: e4 });
+        {
+          const rates = [v1, v2, v3, qdii ? v4 : null]
+            .map((v) => (v?.gszzl != null && Number.isFinite(Number(v.gszzl)) ? Number(v.gszzl) : null))
+            .filter((v) => v != null);
+          setSourceSpread(rates.length >= 2 ? Math.max(...rates) - Math.min(...rates) : null);
+        }
         setValuationSources({
           1: v1?.valuationSource,
           2: v2?.valuationSource,
@@ -264,6 +286,50 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
             )}
           </div>
         </div>
+
+        {(localAccuracy?.samples >= ACCURACY_MIN_SAMPLES || sourceSpread != null) && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '8px',
+              alignItems: 'center',
+              marginBottom: 12,
+              padding: '6px 10px',
+              borderRadius: '6px',
+              background: 'color-mix(in srgb, var(--muted) 8%, transparent)',
+              fontSize: '10px',
+              color: 'var(--muted)',
+              lineHeight: 1.4
+            }}
+          >
+            {localAccuracy?.samples >= ACCURACY_MIN_SAMPLES && localAccuracy.recent?.samples > 0 && (
+              <span>
+                近 {ACCURACY_WINDOW} 日（{localAccuracy.recent.samples} 个样本）：平均误差{' '}
+                {localAccuracy.recent.mae?.toFixed(2)}% · RMSE {localAccuracy.recent.rmse?.toFixed(2)}% · 方向命中{' '}
+                {localAccuracy.recent.hitRate}%
+              </span>
+            )}
+            {localAccuracy?.samples >= ACCURACY_MIN_SAMPLES && (
+              <span>
+                全历史 {localAccuracy.samples} 日 平均误差 {localAccuracy.mae?.toFixed(2)}%
+                {localAccuracy.pending > 0 ? ` · 今日待配对 ${localAccuracy.pending} 笔` : ''}
+              </span>
+            )}
+            {localAccuracy?.recent?.samples >= ACCURACY_CALIBRATION_MIN_SAMPLES &&
+              Math.abs(localAccuracy.recent.bias) >= ACCURACY_BIAS_THRESHOLD && (
+                <span style={{ color: 'var(--warning, #f59e0b)' }}>
+                  已按近 {localAccuracy.recent.samples} 日均偏差 {localAccuracy.recent.bias > 0 ? '+' : ''}
+                  {localAccuracy.recent.bias.toFixed(2)}% 校准估值
+                </span>
+              )}
+            {sourceSpread != null && sourceSpread >= 1 && (
+              <span style={{ color: 'var(--warning, #f59e0b)' }}>
+                三源分歧 {sourceSpread.toFixed(2)}pt，分歧较大时「最准」标签参考价值有限
+              </span>
+            )}
+          </div>
+        )}
 
         <div style={{ marginBottom: 24 }}>
           {loading ? (

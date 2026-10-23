@@ -44,7 +44,8 @@ const CACHE_VERSION = 1;
 const HK_CACHE_VERSION = 2;
 // v3：recent 从「近 3 个月日频」扩展为「近 5 年（近端日频 + 远端抽稀）」，
 //     以支持近 6 月 / 近 1 年 / 近 3 年 / 成立来；旧缓存的 recent 太短，必须失效
-const VALUE_WINDOW_CACHE_VERSION = 3;
+// v4：窗口内的走势点新增 price（股息率历史靠价格倒推），旧版缓存的点没有该字段
+const VALUE_WINDOW_CACHE_VERSION = 4;
 /** 缓存前缀 → 期望版本（清理工具按族校验版本） */
 const CACHE_FAMILIES = {
   [CACHE_PREFIX]: CACHE_VERSION,

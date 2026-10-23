@@ -110,10 +110,22 @@ export default function FundIntradayChart({
 
   const chartData = useMemo(() => {
     if (!series.length) return { labels: [], datasets: [] };
-    const labels = series.map((d) => d.time);
+    // 跨日序列：每天第一个点的时间标签带上日期，避免两天都出现「10:03」看不出分界
+    let prevDate = null;
+    const labels = series.map((d) => {
+      const label = d.date && d.date !== prevDate ? `${String(d.date).slice(5)} ${d.time}` : d.time;
+      prevDate = d.date || prevDate;
+      return label;
+    });
     const values = series.map((d) => d.value);
     const ref = referenceNav != null && Number.isFinite(Number(referenceNav)) ? Number(referenceNav) : values[0];
-    const percentages = values.map((v) => (ref ? ((v - ref) / ref) * 100 : 0));
+    // 纵轴口径：优先用落盘时记录的 gszzl（相对各自参考净值的涨跌幅，跨日可比）；
+    // 旧数据没有 gszzl 时回退到「净值相对参考净值」的涨跌幅
+    const percentages = series.map((d, i) => {
+      if (isNumber(d.gszzl)) return d.gszzl;
+      const v = values[i];
+      return ref ? ((v - ref) / ref) * 100 : 0;
+    });
     const lastPct = percentages[percentages.length - 1];
     const riseColor = chartColors.danger;
     const fallColor = chartColors.success;

@@ -14,7 +14,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { classifyFund, FUND_CATEGORIES, CATEGORY_NAMES, refineClassificationByHoldings } from '../fundClassifier.js';
-import { getValuationRule, VALUATION_RULES } from '../valuationRules.js';
+import { getValuationRule, VALUATION_RULES, getPendingIndicators, validateValuationRules } from '../valuationRules.js';
 import {
   calculateValuationScore,
   pegToScore,
@@ -273,10 +273,123 @@ describe('valuationRules', () => {
     }
   });
 
+  it('同一指标不得重复计权（pe 与 pePercentile 不能同时出现）', () => {
+    for (const cat of Object.values(FUND_CATEGORIES)) {
+      const rule = getValuationRule(cat);
+      const keys = rule.indicators.map((i) => i.key);
+      assert.equal(new Set(keys).size, keys.length, `${cat} 出现重复指标：${keys.join(',')}`);
+      // 同一底层指标的原始值项和分位项同时存在 = 该指标被双计权
+      for (const key of keys) {
+        if (!key.endsWith('Percentile')) continue;
+        const base = key.slice(0, -'Percentile'.length);
+        assert.ok(!keys.includes(base), `${cat} 同时含 ${base} 与 ${key}（${base} 被双计权）`);
+      }
+    }
+  });
+
+  it('待补指标（pendingIndicators）不与已参与评分的指标重叠', () => {
+    for (const cat of Object.values(FUND_CATEGORIES)) {
+      const active = new Set(getValuationRule(cat).indicators.map((i) => i.key));
+      for (const p of getPendingIndicators(cat)) {
+        assert.ok(!active.has(p.key), `${cat} 的待补指标 ${p.key} 已在评分中`);
+      }
+    }
+  });
+
+  it('validateValuationRules 无告警（权重归一 + 无重复 + 指标已定义）', () => {
+    assert.deepEqual(validateValuationRules(), []);
+  });
+
   it('getValuationRule 对未知分类返回默认规则', () => {
     const rule = getValuationRule('unknown_category');
     assert.ok(rule);
     assert.equal(rule.name, '其他');
+  });
+});
+
+// ========== 亏损守卫 / 分位收缩 / 股息支付率 ==========
+
+describe('computePercentile 亏损守卫', () => {
+  it('当前值 <= 0 → null（亏损不能读成「极度低估」）', () => {
+    const values = [10, 12, 14, 16, 18];
+    assert.equal(engineInternals.computePercentile(values, -3), null);
+    assert.equal(engineInternals.computePercentile(values, 0), null);
+  });
+
+  it('excludeNonPositive 把亏损期样本剔出参照分布', () => {
+    const values = [-8, -4, 10, 12, 14];
+    // 未剔除时 -3 之外的当前值 13 → 4/5 样本小于它 = 80
+    assert.equal(engineInternals.computePercentile(values, 13), 80);
+    // 剔除负值后 13 → 2/3 = 66.67
+    const guarded = engineInternals.computePercentile(values, 13, { excludeNonPositive: true });
+    assert.ok(Math.abs(guarded - 66.667) < 0.01, `实际 ${guarded}`);
+  });
+});
+
+describe('分位收缩（shrinkPercentile）', () => {
+  it('样本数等于参照规模时向 50 收缩一半', () => {
+    assert.equal(engineInternals.shrinkPercentile(100, 120), 75);
+    assert.equal(engineInternals.shrinkPercentile(0, 120), 25);
+  });
+
+  it('样本充足时几乎不收缩，极端分位被压向中位', () => {
+    const p = engineInternals.shrinkPercentile(100, 1200);
+    assert.ok(p > 95 && p < 100, `实际 ${p}`);
+  });
+
+  it('样本极少时被强力拉回 50', () => {
+    const p = engineInternals.shrinkPercentile(100, 60);
+    assert.ok(p < 75, `实际 ${p}`);
+  });
+
+  it('分位为 50 或非法输入时保持中性', () => {
+    assert.equal(engineInternals.shrinkPercentile(50, 30), 50);
+    assert.equal(engineInternals.shrinkPercentile(null, 30), null);
+    assert.equal(engineInternals.shrinkPercentile(80, 0), null);
+  });
+});
+
+describe('股息支付率评分', () => {
+  it('20%~40% 为健康区间（50 分左右），过高或过低都偏离', () => {
+    const score = engineInternals.dividendPayoutRatioToScore;
+    assert.equal(score(30), 50);
+    assert.ok(score(10) > score(30), '支付率过低 → 「不分红」');
+    assert.ok(score(120) > score(30), '支付率过高 → 不可持续');
+    assert.equal(score(null), null);
+  });
+
+  it('规则为 dividend 分类计权后，支付率真的参与了评分', () => {
+    const r = calculateValuationScore(
+      {
+        dividendYield: 5,
+        dividendYieldPercentile: 20,
+        pbPercentile: 20,
+        pePercentile: 20,
+        roe: 12,
+        dividendPayoutRatio: 35
+      },
+      FUND_CATEGORIES.DIVIDEND
+    );
+    const d = r.details.find((x) => x.key === 'dividendPayoutRatio');
+    assert.equal(d.contributed, true);
+    assert.equal(d.score, 50);
+  });
+});
+
+describe('亏损股的分位不参与评分', () => {
+  it('pe <= 0 时 pePercentile 作废并标记 lossGuarded', () => {
+    const r = calculateValuationScore({ pe: -8, pePercentile: 3 }, FUND_CATEGORIES.BROAD_INDEX);
+    const d = r.details.find((x) => x.key === 'pe');
+    assert.equal(d.contributed, false);
+    assert.equal(d.lossGuarded, true);
+    assert.equal(r.score, null);
+  });
+
+  it('pe > 0 时分位照常生效', () => {
+    const r = calculateValuationScore({ pe: 12, pePercentile: 10 }, FUND_CATEGORIES.BROAD_INDEX);
+    const d = r.details.find((x) => x.key === 'pe');
+    assert.equal(d.contributed, true);
+    assert.equal(d.lossGuarded, false);
   });
 });
 
@@ -597,9 +710,10 @@ describe('calculateValuationScore', () => {
     const pbDetail = r.details.find((d) => d.key === 'pbPercentile');
     assert.equal(peDetail.contributed, true);
     assert.equal(pbDetail.contributed, true);
-    // (40*0.15 + 20*0.10) / 0.25 = 32
+    // (40*0.21 + 20*0.14) / 0.35 = 32
     assert.equal(r.score, 32);
-    assert.equal(r.confidence, 25);
+    // 指标覆盖率 = pePercentile(0.21) + pbPercentile(0.14) = 35%
+    assert.equal(r.confidence, 35);
   });
 
   it('null metrics → 数据不足', () => {
@@ -647,8 +761,8 @@ describe('calculateValuationScore', () => {
     const peDetail = r.details.find((d) => d.key === 'pe');
     assert.equal(peDetail.contributed, false, 'pe 应保持不计入（依赖历史分位）');
     assert.equal(peDetail.score, null);
-    // 仅 roe(0.1) + epsGrowth(0.1) 参与 → 20%
-    assert.equal(r.confidence, 20);
+    // 仅 roe(0.15) + epsGrowth(0.15) 参与 → 30%
+    assert.equal(r.confidence, 30);
   });
 
   it('回归护栏：红利型股息率缺分位时仍回退阈值评分（absolute: true 显式声明）', () => {
@@ -705,5 +819,34 @@ describe('extractMetricsFromHoldingsValuation', () => {
     assert.equal(m.pe, 15);
     assert.equal(m.pb, null);
     assert.equal(m.ps, null);
+  });
+});
+
+describe('股息率分位（第三批 §五 补源）', () => {
+  it('有股息率分位时优先于绝对阈值', () => {
+    const base = { dividendYield: 1.5, pe: 8, pbPercentile: 50, pePercentile: 50, roe: 10, dividendPayoutRatio: 40 };
+    const absoluteOnly = calculateValuationScore(base, 'dividend');
+    const withPercentile = calculateValuationScore({ ...base, dividendYieldPercentile: 8 }, 'dividend');
+    const scoreOf = (r) => r.details.find((d) => d.key === 'dividendYield').score;
+    // 股息率 1.5% 的绝对阈值只给 65 分；分位 8 说明处于自身历史极低位 → 100-8 = 92 分
+    assert.equal(scoreOf(absoluteOnly), 65);
+    assert.equal(scoreOf(withPercentile), 92);
+    assert.ok(withPercentile.score > absoluteOnly.score);
+  });
+
+  it('分位为 null 时仍回退绝对阈值（不会因为缺历史而丢分）', () => {
+    const r = calculateValuationScore(
+      {
+        dividendYield: 1.5,
+        dividendYieldPercentile: null,
+        pe: 8,
+        pbPercentile: 50,
+        pePercentile: 50,
+        roe: 10,
+        dividendPayoutRatio: 40
+      },
+      'dividend'
+    );
+    assert.equal(r.details.find((d) => d.key === 'dividendYield').score, 65);
   });
 });

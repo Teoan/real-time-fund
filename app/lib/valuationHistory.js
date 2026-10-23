@@ -29,15 +29,27 @@
 // 无法被 `node --test` 直接加载（项目对 app/lib 下的模块跑单测）。打包器两种写法都支持。
 import lodash from 'lodash';
 
-import { calculateValuationScore, computePercentile } from './valuationEngine.js';
+import { calculateValuationScore, computePercentile, shrinkPercentile } from './valuationEngine.js';
+import {
+  buildDailyMetrics,
+  MIN_REFERENCE_SAMPLES as METRICS_MIN_REFERENCE_SAMPLES,
+  EXTRA_PERCENTILE_KEYS,
+  PERCENTILE_METRIC_KEYS as METRICS_PERCENTILE_KEYS
+} from './valuationMetrics.js';
 
 const { isArray, isNumber, isString } = lodash;
 
-/** 分位参照分布的最少样本数（与 fund.js 的分位计算保持一致） */
-const MIN_REFERENCE_SAMPLES = 30;
+/**
+ * 分位参照分布的最少样本数。
+ * 60 ≈ 3 个月交易日：少于这个量级无法称「区间分位」，宁可不参与评分。
+ * 真正的定义在 app/lib/valuationMetrics.js —— 首屏与走势图共用同一个门槛。
+ */
+const MIN_REFERENCE_SAMPLES = METRICS_MIN_REFERENCE_SAMPLES;
 
-/** 分位指标键（与 fund.js 的 PERCENTILE_METRIC_KEYS 对齐） */
-const PERCENTILE_METRIC_KEYS = ['pe', 'pb', 'ps'];
+/** 分位指标键（与首屏口径共用） */
+const PERCENTILE_METRIC_KEYS = METRICS_PERCENTILE_KEYS;
+
+export { MIN_REFERENCE_SAMPLES, PERCENTILE_METRIC_KEYS };
 
 /**
  * 区间定义：与「业绩走势」的区间口径保持一致（自然月近似为 30/182 天，年近似为 365 天）。
@@ -158,16 +170,21 @@ export function getPeriodRange(days, now = new Date()) {
  * 这里先把参照分布排序一次，之后用二分求「严格小于当前值的个数」——
  * 与 computePercentile 的判定口径（v < current）完全一致，只是把复杂度从 O(n) 降到 O(log n)。
  *
+ * 两处口径必须与 fund.js 的当前分位计算一致，否则走势图末点会和首屏分数分叉：
+ *   1. 参照分布剔除 <= 0（亏损期 PE/PB/PS 会把分布左尾拉长）；
+ *   2. 当前值 <= 0 直接返回 null（亏损不能读成「极度低估」）；
+ *   3. 结果按参照样本数做分位收缩（见 valuationEngine.shrinkPercentile）。
+ *
  * @param {number[]} referenceValues
- * @returns {(value: number) => number|null} 返回 0-100 分位
+ * @returns {(value: number) => number|null} 返回 0-100（已收缩）分位
  */
 export function createRanker(referenceValues) {
   const sorted = (isArray(referenceValues) ? referenceValues : [])
-    .filter((v) => Number.isFinite(v))
+    .filter((v) => Number.isFinite(v) && v > 0)
     .sort((a, b) => a - b);
   if (sorted.length === 0) return () => null;
   return (value) => {
-    if (!Number.isFinite(value)) return null;
+    if (!Number.isFinite(value) || value <= 0) return null;
     // lowerBound：第一个 >= value 的位置，即「严格小于 value」的元素个数
     let lo = 0;
     let hi = sorted.length;
@@ -176,7 +193,7 @@ export function createRanker(referenceValues) {
       if (sorted[mid] < value) lo = mid + 1;
       else hi = mid;
     }
-    return (lo / sorted.length) * 100;
+    return shrinkPercentile((lo / sorted.length) * 100, sorted.length);
   };
 }
 
@@ -189,8 +206,14 @@ export function createRanker(referenceValues) {
  *        每只股票各指标的近端序列（[{date, value}]）
  * @param {Record<string, {pe?: number[], pb?: number[], ps?: number[]}>} params.referenceByCode
  *        每只股票各指标的近 5 年参照分布（用于分位）
- * @param {{roe?: number|null, epsGrowth?: number|null, revenueGrowth?: number|null}} [params.fundamentals]
- *        季度指标，区间内视为常量
+ * @param {Record<string, {pe?: number|null, pb?: number|null, ps?: number|null}>} [params.quoteByCode]
+ *        个别市场（美股）没有估值历史源：这类持仓**没有序列**，只能在区间内视为常量，
+ *        取穿透拿到的当前值。注意只对「序列为空」的股票兜底——A/港股某天没有数据时
+ *        仍应返回 null，否则等于把今天的数据搬到过去（前视偏差）。
+ * @param {{roe?: number|null, epsGrowth?: number|null, revenueGrowth?: number|null,
+ *   peg?: number|null, dividendYield?: number|null, dividendPayoutRatio?: number|null}} [params.fundamentals]
+ *        季度/快照指标，区间内视为常量（含 peg 与股息率——它们与 roe 一样没有日频历史，
+ *        若在此留空，末点就会与首屏分数分叉：首屏算 peg 而走势图算空）
  * @param {string} params.category - 估值规则分类
  * @param {string} params.from - YYYY-MM-DD
  * @param {string} params.to - YYYY-MM-DD
@@ -200,119 +223,78 @@ export function buildValuationScoreSeries({
   perStock,
   historyByCode,
   referenceByCode,
+  quoteByCode,
   fundamentals,
   category,
   from,
   to
 }) {
-  const stocks = (isArray(perStock) ? perStock : []).filter(
-    (s) => s && (Number(s.weight) || 0) > 0 && historyByCode?.[s.code]
-  );
+  // 不再要求「必须有估值历史」：美股持仓没有历史源，但它的 PE/PB 会进首屏的加权，
+  // 若在这里被过滤掉，走势图末点就会与首屏分叉（QDII 尤其明显）。
+  const stocks = (isArray(perStock) ? perStock : []).filter((s) => s && (Number(s.weight) || 0) > 0);
   if (stocks.length === 0) return [];
 
-  // 归一化每只股票的序列，并预取参照分布
-  const prepared = stocks.map((s) => {
+  // 逐股序列归一化（日期升序 + 去非法值），其余聚合交给 buildDailyMetrics
+  const seriesByCode = new Map();
+  // 股息率历史只在有价格序列时才存在，缺了就自然缺席（PERCENTILE_METRIC_KEYS + EXTRA）
+  const seriesKeys = PERCENTILE_METRIC_KEYS.concat(EXTRA_PERCENTILE_KEYS);
+  for (const s of stocks) {
     const hist = historyByCode[s.code] || {};
-    const ref = referenceByCode?.[s.code] || {};
     const series = {};
-    const rankers = {};
-    for (const key of PERCENTILE_METRIC_KEYS) {
+    for (const key of seriesKeys) {
       series[key] = normalizePoints(hist[key]);
-      const values = isArray(ref[key]) ? ref[key].filter((v) => Number.isFinite(v)) : [];
-      rankers[key] = values.length >= MIN_REFERENCE_SAMPLES ? createRanker(values) : null;
     }
-    return {
-      code: s.code,
-      weight: Number(s.weight) || 0,
-      series,
-      rankers
-    };
-  });
+    seriesByCode.set(s.code, series);
+  }
 
   const axis = buildDateAxis(
-    prepared.flatMap((p) => PERCENTILE_METRIC_KEYS.map((k) => p.series[k])),
+    [...seriesByCode.values()].flatMap((series) => PERCENTILE_METRIC_KEYS.map((k) => series[k])),
     from,
     to
   );
   if (axis.length === 0) return [];
 
-  // 权重归一化基数：与 fund.js 的 fetchHoldingsValuation 一致，按「有历史的已穿透持仓」归一。
-  // 只有 PE 的 E/P 倒数法依赖这个绝对比例（其余指标是有权重的比值，对基数不敏感）。
-  const normSum = prepared.reduce((sum, p) => sum + p.weight, 0);
-  if (normSum <= 0) return [];
-
-  const fund = {
+  // 季度指标在区间内视为常量；与首屏同一份快照（见 fund.js fetchFundValuationHistory）
+  const snapshot = {
     roe: fundamentals?.roe ?? null,
     epsGrowth: fundamentals?.epsGrowth ?? null,
-    revenueGrowth: fundamentals?.revenueGrowth ?? null
+    revenueGrowth: fundamentals?.revenueGrowth ?? null,
+    peg: fundamentals?.peg ?? null,
+    dividendYield: fundamentals?.dividendYield ?? null,
+    dividendPayoutRatio: fundamentals?.dividendPayoutRatio ?? null
   };
+
+  const dailyStocks = stocks.map((s) => ({ code: s.code, weight: Number(s.weight) || 0 }));
 
   const out = [];
   for (const date of axis) {
-    let epSum = 0;
-    let coveredWeight = 0;
-    const pctSum = { pe: 0, pb: 0, ps: 0 };
-    const pctWeight = { pe: 0, pb: 0, ps: 0 };
-    const rawSum = { pb: 0, ps: 0 };
-    const rawWeight = { pb: 0, ps: 0 };
+    // 每个日期一次「当日 metrics 组装」——与首屏同一个函数、同一套分位规则
+    const day = buildDailyMetrics({
+      stocks: dailyStocks,
+      resolveValue: (stock, metricKey) => {
+        const series = seriesByCode.get(stock.code)?.[metricKey];
+        // 有历史 → 按日期取（取不到就是 null，不拿今天的数据回填过去）
+        if (isArray(series) && series.length > 0) return asOfValue(series, date);
+        // 完全没有历史（美股）→ 区间内按常量处理
+        const quote = quoteByCode?.[stock.code]?.[metricKey];
+        return isNumber(quote) ? quote : null;
+      },
+      referenceByCode,
+      snapshot
+    });
+    if (!day.metrics) continue;
 
-    for (const stock of prepared) {
-      const w = stock.weight;
-      const wNorm = w / normSum; // E/P 加权用归一化权重
-      const pe = asOfValue(stock.series.pe, date);
-      const pb = asOfValue(stock.series.pb, date);
-      const ps = asOfValue(stock.series.ps, date);
-      if (pe == null && pb == null && ps == null) continue;
-      coveredWeight += w;
-
-      // PE 走 E/P 加权倒数法（与当前时点估值口径一致）
-      if (pe != null && pe > 0) epSum += wNorm / pe;
-      if (pb != null) {
-        rawSum.pb += w * pb;
-        rawWeight.pb += w;
-      }
-      if (ps != null) {
-        rawSum.ps += w * ps;
-        rawWeight.ps += w;
-      }
-
-      // 历史分位：用该股近 5 年参照分布
-      const values = { pe, pb, ps };
-      for (const key of PERCENTILE_METRIC_KEYS) {
-        const v = values[key];
-        const rank = stock.rankers[key];
-        if (v == null || !rank) continue;
-        const pct = rank(v);
-        if (pct == null) continue;
-        pctSum[key] += w * pct;
-        pctWeight[key] += w;
-      }
-    }
-
-    if (coveredWeight <= 0) continue;
-
-    const metrics = {
-      pe: epSum > 0 ? 1 / epSum : null,
-      pb: rawWeight.pb > 0 ? rawSum.pb / rawWeight.pb : null,
-      ps: rawWeight.ps > 0 ? rawSum.ps / rawWeight.ps : null,
-      peg: null,
-      epsGrowth: fund.epsGrowth,
-      revenueGrowth: fund.revenueGrowth,
-      dividendYield: null,
-      roe: fund.roe,
-      pePercentile: pctWeight.pe > 0 ? pctSum.pe / pctWeight.pe : null,
-      pbPercentile: pctWeight.pb > 0 ? pctSum.pb / pctWeight.pb : null,
-      psPercentile: pctWeight.ps > 0 ? pctSum.ps / pctWeight.ps : null
-    };
-
-    const result = calculateValuationScore(metrics, category);
+    const result = calculateValuationScore(day.metrics, category);
     out.push({
       date,
       score: result.score,
       rating: result.rating,
       confidence: result.confidence,
-      metrics,
-      coverage: coveredWeight
+      metrics: day.metrics,
+      coverage: day.coveredWeight,
+      // 离散度与亏损仓位也逐日给出：走势图上的「合理」在高离散度那天并不可信
+      dispersion: day.dispersion,
+      lossWeight: day.lossWeight
     });
   }
 
