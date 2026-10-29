@@ -5,29 +5,63 @@
  */
 
 const CDN_BASE = 'https://cdn.jsdelivr.net/npm/chinese-days@1/dist/years';
-const yearCache = new Map(); // year -> Set<dateStr> (holidays)
+const yearCache = new Map(); // year -> Set<dateStr> (holidays)，只在**加载成功**后写入
+const yearInFlight = new Map(); // year -> Promise，避免并发重复请求
+const yearRetryAfter = new Map(); // year -> 毫秒时间戳，失败后的退避截止时间
+const RETRY_BACKOFF_MS = 60 * 1000;
 
 /**
- * 加载某年的节假日数据
+ * 该年份的节假日数据是否已成功加载。
+ *
+ * 只有加载成功才会返回 true；`isTradingDay` 在未加载的年份会退化成「只排除周末」，
+ * 调用方（延迟确认天数、收益补录）可以用这个函数判断结果是否可信。
  * @param {number} year
- * @returns {Promise<Set<string>>} 节假日日期集合，格式 YYYY-MM-DD
+ * @returns {boolean}
+ */
+export function hasHolidayData(year) {
+  return yearCache.has(year);
+}
+
+/**
+ * 加载某年的节假日数据。
+ *
+ * 失败时**不写入缓存**（早期实现写了一个空集合，导致此后整年都按「每个工作日都是交易日」
+ * 计算，且再也修不回来），改为 60 秒退避后允许重试；返回值在失败时为 null。
+ * @param {number} year
+ * @returns {Promise<Set<string>|null>} 节假日日期集合，格式 YYYY-MM-DD；加载失败返回 null
  */
 export async function loadHolidaysForYear(year) {
   if (yearCache.has(year)) {
     return yearCache.get(year);
   }
-  try {
-    const res = await fetch(`${CDN_BASE}/${year}.json`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    const holidays = new Set(Object.keys(data?.holidays ?? {}));
-    yearCache.set(year, holidays);
-    return holidays;
-  } catch (e) {
-    console.warn(`[tradingCalendar] 加载 ${year} 年节假日失败:`, e);
-    yearCache.set(year, new Set());
-    return yearCache.get(year);
-  }
+  const inFlight = yearInFlight.get(year);
+  if (inFlight) return inFlight;
+
+  const retryAt = yearRetryAfter.get(year);
+  if (retryAt && Date.now() < retryAt) return null;
+
+  const task = (async () => {
+    try {
+      const res = await fetch(`${CDN_BASE}/${year}.json`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const holidays = new Set(Object.keys(data?.holidays ?? {}));
+      // 空集合不等于「今年没有节假日」：正常年份至少春节/国庆若干天，视为异常响应，不落缓存
+      if (holidays.size === 0) throw new Error('节假日数据为空');
+      yearCache.set(year, holidays);
+      yearRetryAfter.delete(year);
+      return holidays;
+    } catch (e) {
+      console.warn(`[tradingCalendar] 加载 ${year} 年节假日失败（${RETRY_BACKOFF_MS / 1000}s 后重试）:`, e);
+      yearRetryAfter.set(year, Date.now() + RETRY_BACKOFF_MS);
+      return null;
+    } finally {
+      yearInFlight.delete(year);
+    }
+  })();
+
+  yearInFlight.set(year, task);
+  return task;
 }
 
 /**
@@ -40,6 +74,9 @@ export async function loadHolidaysForYears(years) {
 
 /**
  * 判断某日期是否为 A股交易日
+ *
+ * 注意：该年节假日数据未加载（或加载失败）时，退化为「只排除周末」——结果可能把节假日
+ * 误判为交易日。需要区分「确定」与「退化」时，配 `hasHolidayData(year)` 使用。
  * @param {dayjs.Dayjs} date - dayjs 对象
  * @param {Map<number, Set<string>>} [cache] - 可选，已加载的年份缓存，默认使用内部 yearCache
  * @returns {boolean}

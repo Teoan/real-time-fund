@@ -24,7 +24,7 @@ import {
   fetchFundConfirmDays,
   fetchFundsBestSources
 } from '../api/fund';
-import { TZ } from '../lib/fundHelpers';
+import { TZ, formatMarketDate } from '../lib/fundHelpers';
 import { getQueryClient } from '../lib/get-query-client';
 import { toast as sonnerToast } from 'sonner';
 
@@ -102,24 +102,32 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
 
       const uniqueCodes = Array.from(new Set(codes));
 
+      // funds 列表快照：补录历史收益时 navRows 会逐行调用 fundCodeStillInStorage，
+      // 原实现每次都 storageStore.getItem('funds') → JSON.parse 整个数组（一次补录最多 N×2 次）。
+      // 这里以 250ms 为粒度复用解析结果，既保留「中途删除基金即停止写入」的语义，又避免重复解析。
+      let fundsSnapshotCache = { at: 0, list: [] };
+      const getFundsList = () => {
+        const now = Date.now();
+        if (fundsSnapshotCache.at && now - fundsSnapshotCache.at < 250) return fundsSnapshotCache.list;
+        let list = [];
+        try {
+          const parsed = storageStore.getItem('funds', []);
+          list = isArray(parsed) ? parsed : [];
+        } catch (e) {
+          list = [];
+        }
+        fundsSnapshotCache = { at: now, list };
+        return list;
+      };
+
       const fundCodeStillInStorage = (code) => {
         if (!code) return false;
-        try {
-          const currentFunds = storageStore.getItem('funds', []);
-          return currentFunds.some((f) => f.code === code);
-        } catch (e) {
-          return false;
-        }
+        return getFundsList().some((f) => f?.code === code);
       };
 
       const getStoredFundSnapshot = (code) => {
         if (!code) return null;
-        try {
-          const currentFunds = storageStore.getItem('funds', []);
-          return currentFunds.find((f) => f.code === code) || null;
-        } catch (e) {
-          return null;
-        }
+        return getFundsList().find((f) => f?.code === code) || null;
       };
 
       try {
@@ -135,7 +143,7 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
           if (!Number.isFinite(earnings) || !Number.isFinite(baseCostAmount) || baseCostAmount <= 0) return null;
           return (earnings / baseCostAmount) * 100;
         };
-        const refreshDateStr = dayjs().tz(TZ).format('YYYY-MM-DD');
+        const refreshDateStr = formatMarketDate();
 
         const calcLatestDayFromFund = (u, share, baseCostAmount) => {
           const nav = Number(u?.dwjz);
@@ -397,7 +405,7 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
 
             if (earliestDate) {
               const cached = currentFundDividends[data.code];
-              const todayStr = dayjs().tz(TZ).format('YYYY-MM-DD');
+              const todayStr = formatMarketDate();
               if (!cached || cached.lastFetchDate !== todayStr) {
                 try {
                   const divs = await fetchFundDividends(data.code, earliestDate);
@@ -415,16 +423,50 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
 
             const navCache = new Map();
 
+            // 同一基金在多个 scope 下要补录的起点往往相同，原实现在 scope 循环里对同一区间
+            // 重复发起 fetchNetValueRangeFromTrend（每个 scope 一次，最多 1 + 分组数个请求）。
+            // 这里取各 scope 最早的 lastRecordedDate 抓一次全量，再按各 scope 起点切片复用。
+            const getExistingList = (scope) => {
+              const pending = dailyChanges[scope]?.[data.code];
+              if (pending) return pending;
+              const stored = currentStore.fundDailyEarnings[scope];
+              const list = stored ? stored[data.code] : null;
+              return isArray(list) ? list : [];
+            };
+            const backfillStarts = targetScopes
+              .map((scope) => {
+                const list = getExistingList(scope);
+                return list.length ? list[list.length - 1]?.date : null;
+              })
+              .filter((d) => isValidDateStr(d) && d < latestNavDate);
+            let sharedNavRows = null;
+            const getScopedNavRows = async (lastRecordedDate) => {
+              if (!sharedNavRows) {
+                if (!backfillStarts.length) return [];
+                const earliest = backfillStarts.reduce((min, d) => (d < min ? d : min), backfillStarts[0]);
+                sharedNavRows = await fetchNetValueRangeFromTrend(data.code, earliest, latestNavDate);
+                const latestNav = Number(data.dwjz);
+                if (
+                  Number.isFinite(latestNav) &&
+                  latestNav > 0 &&
+                  !sharedNavRows.some((r) => r.date === latestNavDate)
+                ) {
+                  sharedNavRows.push({ date: latestNavDate, nav: latestNav });
+                  sharedNavRows.sort((a, b) => a.date.localeCompare(b.date));
+                }
+                for (const r of sharedNavRows) navCache.set(r.date, r.nav);
+              }
+              const start = addDays(lastRecordedDate, 1);
+              const firstIdx = sharedNavRows.findIndex((r) => r.date >= start);
+              return firstIdx === -1 ? [] : sharedNavRows.slice(firstIdx);
+            };
+
             for (const scope of targetScopes) {
               const h =
                 scope === DAILY_EARNINGS_SCOPE_ALL
                   ? currentStore.holdings[data.code]
                   : currentStore.groupHoldings[scope][data.code];
-              const existing =
-                dailyChanges[scope]?.[data.code] ||
-                (currentStore.fundDailyEarnings[scope] && isArray(currentStore.fundDailyEarnings[scope][data.code])
-                  ? currentStore.fundDailyEarnings[scope][data.code]
-                  : []);
+              const existing = getExistingList(scope);
               const lastRecordedDate = existing.length ? existing[existing.length - 1]?.date : null;
 
               const getEffectiveShare = (targetDate) => {
@@ -476,35 +518,24 @@ export function useRefreshManager({ scheduleDcaTrades, processPendingQueue, devi
                 const latestNav = Number(data.dwjz);
                 if (Number.isFinite(latestNav) && latestNav > 0) navCache.set(latestNavDate, latestNav);
 
-                const start = addDays(lastRecordedDate, 1);
-                const navRows = await fetchNetValueRangeFromTrend(data.code, lastRecordedDate, latestNavDate);
-                if (Number.isFinite(latestNav) && latestNav > 0 && !navRows.some((r) => r.date === latestNavDate)) {
-                  navRows.push({ date: latestNavDate, nav: latestNav });
-                  navRows.sort((a, b) => a.date.localeCompare(b.date));
-                }
-                if (fundCodeStillInStorage(data.code)) {
-                  for (const r of navRows) navCache.set(r.date, r.nav);
-                  const firstIdx = navRows.findIndex((r) => r.date >= start);
-                  if (firstIdx !== -1) {
-                    for (let j = firstIdx; j < navRows.length; j++) {
-                      const prevNav =
-                        j > 0
-                          ? navRows[j - 1].nav
-                          : await findPrevTradingNav(data.code, navRows[j].date, navCache, data);
-                      if (!fundCodeStillInStorage(data.code)) break;
-                      if (!Number.isFinite(prevNav) || prevNav <= 0) continue;
-                      const nav = navRows[j].nav;
-                      const cursor = navRows[j].date;
-                      if (!Number.isFinite(nav) || nav <= 0) continue;
-                      const share = getEffectiveShare(cursor);
-                      if (share <= 0) continue;
-                      const earnings = calcEarningsFromNavs(nav, prevNav, share);
-                      const unitCost = Number(h?.cost);
-                      const baseCostAmount = Number.isFinite(unitCost) && unitCost > 0 ? unitCost * share : null;
-                      const rate = calcRateFromEarnings(earnings, baseCostAmount);
-                      if (Number.isFinite(earnings)) {
-                        localRecordToChanges(scope, data.code, earnings, cursor, rate, baseCostAmount, true);
-                      }
+                const navRows = await getScopedNavRows(lastRecordedDate);
+                if (navRows.length && fundCodeStillInStorage(data.code)) {
+                  for (let j = 0; j < navRows.length; j++) {
+                    const prevNav =
+                      j > 0 ? navRows[j - 1].nav : await findPrevTradingNav(data.code, navRows[j].date, navCache, data);
+                    if (!fundCodeStillInStorage(data.code)) break;
+                    if (!Number.isFinite(prevNav) || prevNav <= 0) continue;
+                    const nav = navRows[j].nav;
+                    const cursor = navRows[j].date;
+                    if (!Number.isFinite(nav) || nav <= 0) continue;
+                    const share = getEffectiveShare(cursor);
+                    if (share <= 0) continue;
+                    const earnings = calcEarningsFromNavs(nav, prevNav, share);
+                    const unitCost = Number(h?.cost);
+                    const baseCostAmount = Number.isFinite(unitCost) && unitCost > 0 ? unitCost * share : null;
+                    const rate = calcRateFromEarnings(earnings, baseCostAmount);
+                    if (Number.isFinite(earnings)) {
+                      localRecordToChanges(scope, data.code, earnings, cursor, rate, baseCostAmount, true);
                     }
                   }
                 }

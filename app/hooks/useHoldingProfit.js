@@ -5,6 +5,25 @@ import { formatDate, toTz, isNavUpdated } from '../lib/fundHelpers';
 import { countTradingDaysBetween } from '../lib/tradingCalendar';
 
 /**
+ * 由「市值 + 当日涨幅(%)」反推当日收益金额。
+ *
+ * 分母 `1 + rate / 100` 在 rate ≤ -100% 时会 ≤ 0：净值不可能跌破 0，这类数据只会来自源站
+ * 异常（`gszzl` 被写成 -100、净值断档、单位错位成百分数）。此时宁可返回 null
+ * （今日收益暂不可算），也不要让页面出现「市值 - 负数」这种天文数字。
+ * @param {number} amount 当日用于计算的市值
+ * @param {number} ratePct 当日涨幅（%）
+ * @returns {number|null}
+ */
+const profitFromChangeRate = (amount, ratePct) => {
+  if (!isNumber(amount) || !Number.isFinite(amount)) return null;
+  const rate = Number(ratePct);
+  if (!Number.isFinite(rate)) return null;
+  const denom = 1 + rate / 100;
+  if (!(denom > 0.01)) return null;
+  return amount - amount / denom;
+};
+
+/**
  * 基金持仓与当日/累计收益计算逻辑自定义 Hook
  * @param {object} deps
  * @param {string | null} deps.activeGroupId - 当前活跃分组 ID
@@ -206,7 +225,7 @@ export function useHoldingProfit({ activeGroupId } = {}) {
               rate = Number.isFinite(zzl) ? zzl : Number(fund.gszzl);
             }
             if (!Number.isFinite(rate)) rate = 0;
-            profitToday = amount - amount / (1 + rate / 100);
+            profitToday = profitFromChangeRate(amount, rate);
           }
         } else {
           profitToday = null;
@@ -228,7 +247,7 @@ export function useHoldingProfit({ activeGroupId } = {}) {
           } else {
             const amount = shareForTodayProfit * currentNav;
             const gzChange = Number(fund.gszzl) || 0;
-            profitToday = amount - amount / (1 + gzChange / 100);
+            profitToday = profitFromChangeRate(amount, gzChange);
           }
         } else {
           profitToday = null;

@@ -170,6 +170,7 @@ export const buildDailyMetrics = ({
   if (list.length === 0 || normSum <= 0) return empty;
 
   let epSum = 0;
+  let epWeight = 0;
   let coveredWeight = 0;
   let lossWeight = 0;
   // 分位指标 = 估值乘数 + 有历史序列才启用的额外列（股息率）；后者该股票没有序列时自然缺席
@@ -215,8 +216,14 @@ export const buildDailyMetrics = ({
       lossWeight += w;
     }
 
-    // PE 用 E/P 倒数法：Σw/PE 的倒数是「加权盈利收益率」的倒数，避免高 PE 被权重放大
-    if (values.pe != null && values.pe > 0) epSum += w / normSum / values.pe;
+    // PE 用 E/P 倒数法：Σw/PE 的倒数是「按权重加权的盈利收益率」的倒数，避免高 PE 被权重放大。
+    // 分母必须用**有 PE 的那部分权重**（epWeight）：早期实现除以全体权重 normSum，
+    // 当 PE 覆盖率 < 100%（有股票亏损/无 PE）时会整只基金的 PE 被放大 1/覆盖率，
+    // 与 PB/PS 的 rawWeight 口径也不一致。
+    if (values.pe != null && values.pe > 0) {
+      epSum += w / values.pe;
+      epWeight += w;
+    }
     if (values.pb != null) {
       rawSum.pb += w * values.pb;
       rawWeight.pb += w;
@@ -244,7 +251,7 @@ export const buildDailyMetrics = ({
   if (coveredWeight <= 0) return { ...empty, perStockPercents };
 
   const metrics = {
-    pe: epSum > 0 ? round(1 / epSum) : null,
+    pe: epWeight > 0 && epSum > 0 ? round(epWeight / epSum) : null,
     pb: rawWeight.pb > 0 ? round(rawSum.pb / rawWeight.pb) : null,
     ps: rawWeight.ps > 0 ? round(rawSum.ps / rawWeight.ps) : null
   };

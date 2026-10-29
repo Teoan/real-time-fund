@@ -33,6 +33,8 @@ const TZ = getBrowserTimeZone();
 dayjs.tz.setDefault(TZ);
 const nowInTz = () => dayjs().tz(TZ);
 const toTz = (input) => (input ? dayjs.tz(input, TZ) : nowInTz());
+// 15:00 申购截止是**北京时间**的 15:00，不能按浏览器时区判断
+const nowInMarketTz = () => dayjs().tz(DEFAULT_TZ);
 const formatDate = (input) => toTz(input).format('YYYY-MM-DD');
 
 export default function TradeModal({ type, fund, holding, onClose, onConfirm, pendingTrades = [], onDeletePending }) {
@@ -46,7 +48,7 @@ export default function TradeModal({ type, fund, holding, onClose, onConfirm, pe
   const [date, setDate] = useState(() => {
     return formatDate();
   });
-  const [isAfter3pm, setIsAfter3pm] = useState(nowInTz().hour() >= 15);
+  const [isAfter3pm, setIsAfter3pm] = useState(nowInMarketTz().hour() >= 15);
   const [calcShare, setCalcShare] = useState(null);
 
   const parseNumberish = (input) => {

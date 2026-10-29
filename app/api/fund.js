@@ -6,6 +6,7 @@ import { storageStore } from '../stores';
 import { asyncPool, withRetry } from '../lib/asyncHelper';
 import { fetchWithRetry } from '../lib/fetchWithRetry';
 import { getQueryClient } from '../lib/get-query-client';
+import { createManualQueryCache } from '../lib/manualQueryCache';
 import * as qk from '../lib/query-keys';
 import { isSupabaseConfigured, supabase, canUseSupabaseBusiness, tripSupabaseCircuit } from '../lib/supabase';
 import { isTradingDay } from '../lib/tradingCalendar';
@@ -63,6 +64,18 @@ const TZ = getBrowserTimeZone();
 dayjs.tz.setDefault(TZ);
 const nowInTz = () => dayjs().tz(TZ);
 const toTz = (input) => (input ? dayjs.tz(input, TZ) : nowInTz());
+// 市场日期边界（「今天」是哪一天、区间终点）必须按北京时间，不能用浏览器时区
+const nowInMarketTz = () => dayjs().tz(DEFAULT_TZ);
+
+/**
+ * 手动读写缓存的 TTL 表。
+ *
+ * 本文件里所有「手动 set/get、没有 useQuery 观察者」的缓存都必须走它：
+ * TanStack Query v5 的 `setQueryData(key, data, { staleTime })` 会静默丢弃 staleTime，
+ * 而 `getQueryData()` 不检查时效，条目实际只受 gcTime（默认 5 分钟）约束。
+ * 详见 app/lib/manualQueryCache.js 顶部说明与 __tests__/manualQueryCache.test.js。
+ */
+const manualCache = createManualQueryCache({ getQueryClient });
 
 /**
  * 获取单位净值的缓存时长（单位：毫秒）
@@ -149,10 +162,9 @@ const processRelatedSectorsQueue = async () => {
         });
       }
 
-      const qc = getQueryClient();
       for (const code of missingCodes) {
         const value = foundMap.get(code) || '';
-        qc.setQueryData(qk.relatedSectors(code, seg), value, { staleTime: ONE_DAY_MS });
+        manualCache.set(qk.relatedSectors(code, seg), value, ONE_DAY_MS);
 
         const key = `${code}|${seg}`;
         const resolver = relatedSectorsInflight.get(key);
@@ -213,10 +225,9 @@ const processFundSecidsQueue = async () => {
       });
     }
 
-    const qc = getQueryClient();
     for (const label of missingLabels) {
       const value = foundMap.get(label) || '';
-      qc.setQueryData(qk.fundSecid(label), value, { staleTime: ONE_DAY_MS });
+      manualCache.set(qk.fundSecid(label), value, ONE_DAY_MS);
 
       const resolver = fundSecidsInflight.get(label);
       if (resolver) {
@@ -245,7 +256,6 @@ export const fetchRelatedSectorsBatch = async (codes, { cacheTime = ONE_DAY_MS, 
   if (!canUseSupabaseBusiness()) return {};
 
   const seg = authSegment != null && authSegment !== '' ? String(authSegment) : 'anon';
-  const qc = getQueryClient();
   const results = {};
 
   const promisesToWait = [];
@@ -255,7 +265,7 @@ export const fetchRelatedSectorsBatch = async (codes, { cacheTime = ONE_DAY_MS, 
     if (!normalized) continue;
 
     // 优先从 React Query 同步缓存中取
-    const cached = qc.getQueryData(qk.relatedSectors(normalized, seg));
+    const cached = manualCache.get(qk.relatedSectors(normalized, seg));
     if (cached !== undefined) {
       results[normalized] = cached;
       continue;
@@ -312,7 +322,6 @@ export const fetchFundSecidsBatch = async (labels, { cacheTime = ONE_DAY_MS } = 
   if (!isArray(labels) || labels.length === 0) return {};
   if (!canUseSupabaseBusiness()) return {};
 
-  const qc = getQueryClient();
   const results = {};
 
   const promisesToWait = [];
@@ -322,7 +331,7 @@ export const fetchFundSecidsBatch = async (labels, { cacheTime = ONE_DAY_MS } = 
     if (!normalized) continue;
 
     // 优先从 React Query 同步缓存中取
-    const cached = qc.getQueryData(qk.fundSecid(normalized));
+    const cached = manualCache.get(qk.fundSecid(normalized));
     if (cached !== undefined) {
       results[normalized] = cached;
       continue;
@@ -374,14 +383,13 @@ export const fetchEastmoneySectorQuotesBatch = async (secids, { cacheTime = SECT
   if (!isArray(secids) || secids.length === 0) return {};
   if (typeof fetch === 'undefined') return {};
 
-  const qc = getQueryClient();
   const results = {};
   const missingSecids = [];
 
   for (const secid of secids) {
     const s = secid != null ? String(secid).trim() : '';
     if (!s) continue;
-    const cached = qc.getQueryData(qk.eastSectorQuote(s));
+    const cached = manualCache.get(qk.eastSectorQuote(s));
     if (cached !== undefined) {
       results[s] = cached;
     } else {
@@ -423,7 +431,7 @@ export const fetchEastmoneySectorQuotesBatch = async (secids, { cacheTime = SECT
             };
 
             results[key] = quote;
-            qc.setQueryData(qk.eastSectorQuote(key), quote, { staleTime: cacheTime });
+            manualCache.set(qk.eastSectorQuote(key), quote, cacheTime);
           }
         } catch (e) {
           console.error('Fetch sector quotes batch chunk error:', e);
@@ -434,7 +442,7 @@ export const fetchEastmoneySectorQuotesBatch = async (secids, { cacheTime = SECT
     for (const s of missingSecids) {
       if (results[s] === undefined) {
         results[s] = null;
-        qc.setQueryData(qk.eastSectorQuote(s), null, { staleTime: cacheTime });
+        manualCache.set(qk.eastSectorQuote(s), null, cacheTime);
       }
     }
   } catch (e) {
@@ -868,7 +876,7 @@ const isLastQuarterReport = (reportDateStr) => {
 };
 
 export const fetchSmartFundNetValue = async (code, startDate) => {
-  const today = nowInTz().startOf('day');
+  const today = nowInMarketTz().startOf('day');
   let current = toTz(startDate).startOf('day');
   for (let i = 0; i < 30; i++) {
     if (current.isAfter(today)) break;
@@ -883,7 +891,7 @@ export const fetchSmartFundNetValue = async (code, startDate) => {
 };
 
 export const fetchSmartFundNetValueBackward = async (code, startDate) => {
-  const today = nowInTz().startOf('day');
+  const today = nowInMarketTz().startOf('day');
   let current = toTz(startDate).startOf('day');
   if (current.isAfter(today)) current = today;
   for (let i = 0; i < 30; i++) {
@@ -1028,7 +1036,6 @@ const processFundValuationLastQueue = async () => {
         if (!json?.success) throw new Error('FundValuationLast API returned failure');
         const items = isArray(json.data) ? json.data : [];
 
-        const qc = getQueryClient();
         const foundMap = new Map();
         for (const item of items) {
           const code = item.FCODE != null ? String(item.FCODE).trim() : '';
@@ -1050,7 +1057,8 @@ const processFundValuationLastQueue = async () => {
           if (!isNil(item.PDATE)) valuation.jzrq = String(item.PDATE);
 
           foundMap.set(code, valuation);
-          qc.setQueryData(qk.fundValuationLast(code), valuation, { staleTime: FUND_VALUATION_LAST_STALE_TIME });
+          // 10s 有效：盘中 30s 轮询能取到新值，同一渲染批次内的重复调用仍命中缓存
+          manualCache.set(qk.fundValuationLast(code), valuation, FUND_VALUATION_LAST_STALE_TIME);
         }
 
         // 分发结果
@@ -1094,9 +1102,8 @@ const fetchFundValuationLastBatched = (code) => {
     return Promise.reject(new Error('无浏览器环境'));
   }
 
-  // 优先读 TanStack Query 缓存
-  const qc = getQueryClient();
-  const cached = qc.getQueryData(qk.fundValuationLast(c));
+  // 优先读缓存（10s 有效，见 manualCache 说明）
+  const cached = manualCache.get(qk.fundValuationLast(c));
   if (cached !== undefined) {
     return Promise.resolve(cached);
   }
@@ -1271,9 +1278,8 @@ export async function fetchBestValuationSource(code, jzrq, actualZzl) {
   const c = code != null ? String(code).trim() : '';
   if (!c || !jzrq || !isNumber(actualZzl) || !Number.isFinite(actualZzl)) return null;
 
-  const qc = getQueryClient();
   const cacheKey = qk.bestValuationSource(c, jzrq, actualZzl);
-  const cached = qc.getQueryData(cacheKey);
+  const cached = manualCache.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
@@ -1287,7 +1293,7 @@ export async function fetchBestValuationSource(code, jzrq, actualZzl) {
 
     if (error || !data?.success) return null;
     const res = data.data || null;
-    qc.setQueryData(cacheKey, res, { staleTime: 60 * 60 * 1000 });
+    manualCache.set(cacheKey, res, 60 * 60 * 1000);
     return res;
   } catch (e) {
     return null;
@@ -1306,9 +1312,8 @@ export async function fetchFundBestSource(fundCode) {
   const code = fundCode != null ? String(fundCode).trim() : '';
   if (!code) return null;
 
-  const qc = getQueryClient();
   const cacheKey = qk.fundBestSource(code);
-  const cached = qc.getQueryData(cacheKey);
+  const cached = manualCache.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
@@ -1320,7 +1325,7 @@ export async function fetchFundBestSource(fundCode) {
     if (error || !data?.source) return null;
     const res = SOURCE_NAME_TO_ID[data.source] ?? null;
     if (res != null) {
-      qc.setQueryData(cacheKey, res, { staleTime: 60 * 60 * 1000 });
+      manualCache.set(cacheKey, res, 60 * 60 * 1000);
     }
     return res;
   } catch {
@@ -1336,14 +1341,13 @@ export async function fetchFundBestSource(fundCode) {
 export async function fetchFundsBestSources(fundCodes) {
   if (!isSupabaseConfigured || !isArray(fundCodes) || fundCodes.length === 0) return {};
 
-  const qc = getQueryClient();
   const result = {};
   const missingCodes = [];
 
   for (const c of fundCodes) {
     const code = c != null ? String(c).trim() : '';
     if (!code) continue;
-    const cached = qc.getQueryData(qk.fundBestSource(code));
+    const cached = manualCache.get(qk.fundBestSource(code));
     if (cached !== undefined) {
       result[code] = cached;
     } else {
@@ -1364,7 +1368,7 @@ export async function fetchFundsBestSources(fundCodes) {
       const id = SOURCE_NAME_TO_ID[sourceName];
       if (id != null) {
         result[code] = id;
-        qc.setQueryData(qk.fundBestSource(code), id, { staleTime: 60 * 60 * 1000 });
+        manualCache.set(qk.fundBestSource(code), id, 60 * 60 * 1000);
       }
     });
     return result;
@@ -2440,14 +2444,13 @@ const processStockFundamentalsQueue = async () => {
         })
       );
 
-      const qc = getQueryClient();
       for (const r of results) {
         const inflight = stockFundamentalsInflight.get(r.secid);
         if (!inflight) continue;
         if (r.__error) {
           inflight.reject(new Error(r.__error));
         } else {
-          qc.setQueryData(qk.stockFundamentals(r.secid), r, { staleTime: STOCK_FUNDAMENTALS_STALE_TIME });
+          manualCache.set(qk.stockFundamentals(r.secid), r, STOCK_FUNDAMENTALS_STALE_TIME);
           inflight.resolve(r);
         }
         stockFundamentalsInflight.delete(r.secid);
@@ -2510,8 +2513,7 @@ const lookupStockFundamentals = (s) => {
     return aktoolsFetchStockFundamentals(s, tail);
   }
 
-  const qc = getQueryClient();
-  const cached = qc.getQueryData(qk.stockFundamentals(s));
+  const cached = manualCache.get(qk.stockFundamentals(s));
   if (cached !== undefined) return Promise.resolve(cached);
   const existing = stockFundamentalsInflight.get(s);
   if (existing) return existing.promise;
@@ -2545,16 +2547,14 @@ const lookupStockFundamentals = (s) => {
 const needsPush2Supplement = (r) => Boolean(r) && (r.dividendYield == null || r.epsGrowth == null);
 
 const aktoolsFetchStockFundamentals = async (secid, symbol6) => {
-  const qc = getQueryClient();
-
-  // 1. TanStack Query 内存缓存（旧缓存可能缺股息率/净利同比，缺失时继续走补充）
-  const memCached = qc.getQueryData(qk.stockFundamentals(secid));
+  // 1. 内存缓存（旧缓存可能缺股息率/净利同比，缺失时继续走补充）
+  const memCached = manualCache.get(qk.stockFundamentals(secid));
   if (memCached !== undefined && !needsPush2Supplement(memCached)) return memCached;
 
   // 2. localStorage 天级缓存（24h 自然过期）
   const localCached = getCachedStockFundamental(symbol6);
   if (localCached && !needsPush2Supplement(localCached)) {
-    qc.setQueryData(qk.stockFundamentals(secid), localCached, { staleTime: ONE_DAY_MS });
+    manualCache.set(qk.stockFundamentals(secid), localCached, ONE_DAY_MS);
     return localCached;
   }
 
@@ -2588,7 +2588,7 @@ const aktoolsFetchStockFundamentals = async (secid, symbol6) => {
       writeStockFundamentalCache(symbol6, merged);
     }
   }
-  qc.setQueryData(qk.stockFundamentals(secid), merged, { staleTime: ONE_DAY_MS });
+  manualCache.set(qk.stockFundamentals(secid), merged, ONE_DAY_MS);
   return merged;
 };
 
@@ -2707,8 +2707,8 @@ const fetchStockRoeWithFallback = (symbol, market = 'A') => {
 
   const qc = getQueryClient();
   const queryKey = qk.stockRoe(m, s);
-  const cached = qc.getQueryData(queryKey);
-  if (cached !== undefined) return Promise.resolve(cached);
+
+  // 交给 fetchQuery 做时效判断：手动 getQueryData 会绕过 staleTime，让 24h 缓存退化成 gcTime（5 分钟）
 
   return qc
     .fetchQuery({
@@ -2766,8 +2766,8 @@ const fetchStockUsFinancial = (symbol) => {
 
   const qc = getQueryClient();
   const queryKey = qk.stockUsFinancial(s);
-  const cached = qc.getQueryData(queryKey);
-  if (cached !== undefined) return Promise.resolve(cached);
+
+  // 同上：时效由 fetchQuery 按 staleTime 判定，避免手动读取绕过缓存有效期
 
   return qc
     .fetchQuery({
@@ -3018,7 +3018,7 @@ export const fetchFundHistory = async (code, range = '1m', options = {}) => {
   const { netValueType = 'unit' } = options;
   const useAccumulatedNetValue = netValueType === 'accumulated';
 
-  const end = nowInTz();
+  const end = nowInMarketTz();
   let start = end.clone();
 
   switch (range) {

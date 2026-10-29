@@ -85,6 +85,22 @@ describe('buildDailyMetrics', () => {
     assert.equal(day.metrics.pe, 13.33);
   });
 
+  it('PE 覆盖率不足时除以「有 PE 的权重」，不放大整只基金的 PE', () => {
+    const day = buildDailyMetrics({
+      stocks: [
+        { code: 'A', weight: 50 },
+        { code: 'B', weight: 50 }
+      ],
+      resolveValue: (s, key) => {
+        if (key === 'pe') return s.code === 'A' ? 10 : null;
+        return null;
+      },
+      referenceByCode: {}
+    });
+    // 分母用 epWeight(0.5) → 0.5/10 → 倒数 10；旧实现除以全体权重会得 20（放大 1/覆盖率）
+    assert.equal(day.metrics.pe, 10);
+  });
+
   it('PB 按有权重的股票归一（缺失值的持仓不拉低均值）', () => {
     const day = buildDailyMetrics({
       stocks: [

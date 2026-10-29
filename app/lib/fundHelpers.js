@@ -30,7 +30,22 @@ export const TZ = getBrowserTimeZone();
 dayjs.tz.setDefault(TZ);
 export const nowInTz = () => dayjs().tz(TZ);
 export const toTz = (input) => (input ? dayjs.tz(input, TZ) : nowInTz());
-export const formatDate = (input) => toTz(input).format('YYYY-MM-DD');
+
+/**
+ * 市场日期时区：**固定** Asia/Shanghai，不跟随浏览器。
+ *
+ * A 股的开收盘、净值日期（`jzrq`）、交易日历都按北京时间，若用浏览器时区算「今天」，
+ * UTC-5~-8 的用户会在北京时间当天早上仍然拿到昨天的 `todayStr`（今日收益、当日收益记录、
+ * 「净值是否已更新」全部差一天），UTC+8 以东的用户则相反。
+ *
+ * 展示用的本地时间仍走 `TZ`（浏览器时区），只有「哪一天」这类市场语义的日期走这里。
+ */
+export const MARKET_TZ = DEFAULT_TZ;
+export const nowInMarketTz = () => dayjs().tz(MARKET_TZ);
+/** 市场日期 YYYY-MM-DD（北京时间的「今天」；传参时按日期解析，不受时区影响） */
+export const formatMarketDate = (input) => (input ? dayjs.tz(input, MARKET_TZ) : nowInMarketTz()).format('YYYY-MM-DD');
+/** @deprecated 语义已是「市场日期」，请优先用 `formatMarketDate`；保留别名兼容既有调用 */
+export const formatDate = (input) => formatMarketDate(input);
 
 export { DCA_SCOPE_GLOBAL, SUMMARY_TAB_ID, SUMMARY_SOURCE_GLOBAL, DEFAULT_FUND_TAG_THEME };
 export const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);

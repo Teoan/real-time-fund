@@ -14,22 +14,12 @@
 import { isArray, isNumber, isObject, isPlainObject, isString } from 'lodash';
 import { storageStore } from '@/app/stores';
 import { DAILY_EARNINGS_SCOPE_ALL } from '@/app/constants';
+import { calculateYtdReturnRate, normalizeEarningsItem } from './ytdReturn.js';
+
+// YTD 计算已抽到 ./ytdReturn.js（纯函数，可被 node --test 直接加载），这里保持原有导出路径不变
+export { calculateYtdReturnRate };
 
 const STORAGE_KEY = 'fundDailyEarnings';
-
-function normalizeItem(item) {
-  if (!item || !isObject(item)) return null;
-  const date = item.date;
-  const earnings = item.earnings;
-  const rate = item.rate;
-  const baseCostAmount = item.baseCostAmount;
-  if (!isString(date) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
-  if (!isNumber(earnings) || !Number.isFinite(earnings)) return null;
-  const normalizedRate = isNumber(rate) && Number.isFinite(rate) ? rate : null;
-  const normalizedBaseCostAmount =
-    isNumber(baseCostAmount) && Number.isFinite(baseCostAmount) && baseCostAmount > 0 ? baseCostAmount : null;
-  return { date, earnings, rate: normalizedRate, baseCostAmount: normalizedBaseCostAmount };
-}
 
 function getStored() {
   if (typeof window === 'undefined') return {};
@@ -88,14 +78,14 @@ export function recordDailyEarnings(code, earnings, dateStr) {
 
   all[scope] = { ...scoped, [code]: nextList };
   setStored(all);
-  return nextList.map(normalizeItem).filter(Boolean);
+  return nextList.map(normalizeEarningsItem).filter(Boolean);
 }
 
 export function getDailyEarnings(code, scope = DAILY_EARNINGS_SCOPE_ALL) {
   const all = getStored();
   const scoped = isPlainObject(all[scope]) ? all[scope] : {};
   const list = isArray(scoped[code]) ? scoped[code] : [];
-  return list.map(normalizeItem).filter(Boolean);
+  return list.map(normalizeEarningsItem).filter(Boolean);
 }
 
 export function clearDailyEarnings(code, scope = null) {
@@ -230,7 +220,7 @@ export function aggregatePortfolioDailyEarnings(fundDailyEarningsMap) {
     const list = fundDailyEarningsMap[code];
     if (!isArray(list)) continue;
     for (const raw of list) {
-      const item = normalizeItem(raw);
+      const item = normalizeEarningsItem(raw);
       if (!item) continue;
       byDate.set(item.date, (byDate.get(item.date) ?? 0) + item.earnings);
     }
@@ -238,80 +228,4 @@ export function aggregatePortfolioDailyEarnings(fundDailyEarningsMap) {
   return [...byDate.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([date, earnings]) => ({ date, earnings, rate: null }));
-}
-
-/**
- * 估算 YTD (今年以来) 收益率。采用每日收益率累乘法（时间加权收益率近似）。
- * @param {Record<string, unknown>} fundDailyEarningsMap - 全局收益记录 { [code]: Array<{date, earnings, baseCostAmount?}> }
- * @param {Record<string, {share: number, cost: number}>} holdings - 当前全局持仓，用作降级时的分母
- * @returns {number|null} YTD 收益率百分比，如 1.23 表示 +1.23%。若无有效数据则返回 null。
- */
-export function calculateYtdReturnRate(fundDailyEarningsMap, holdings) {
-  if (!isPlainObject(fundDailyEarningsMap)) return null;
-
-  const currentYear = new Date().getFullYear();
-  const yearStartStr = `${currentYear}-01-01`;
-
-  // 按日期聚合每日的总收益和总成本快照
-  const dailyStats = new Map();
-
-  for (const code of Object.keys(fundDailyEarningsMap)) {
-    const list = fundDailyEarningsMap[code];
-    if (!isArray(list)) continue;
-    for (const raw of list) {
-      const item = normalizeItem(raw);
-      if (!item) continue;
-      if (item.date >= yearStartStr) {
-        const stat = dailyStats.get(item.date) || { earnings: 0, cost: 0, hasCost: false };
-        stat.earnings += item.earnings;
-        // 如果有当天的快照成本，则累加
-        if (isNumber(item.baseCostAmount) && item.baseCostAmount > 0) {
-          stat.cost += item.baseCostAmount;
-          stat.hasCost = true;
-        } else if (isNumber(item.rate) && item.rate !== 0) {
-          // 如果没有快照成本但存了单日收益率，反推当天的成本
-          const impliedCost = item.earnings / (item.rate / 100);
-          if (impliedCost > 0) {
-            stat.cost += impliedCost;
-            stat.hasCost = true;
-          }
-        }
-        dailyStats.set(item.date, stat);
-      }
-    }
-  }
-
-  if (dailyStats.size === 0) return null;
-
-  // 计算当前持仓总成本（作为部分历史数据无 baseCostAmount 时的 fallback）
-  let currentTotalCost = 0;
-  if (isPlainObject(holdings)) {
-    for (const code of Object.keys(holdings)) {
-      const holding = holdings[code];
-      if (isObject(holding) && isNumber(holding.share) && isNumber(holding.cost)) {
-        currentTotalCost += holding.share * holding.cost; // 份额 × 单位成本 = 总成本
-      }
-    }
-  }
-
-  // 按日期排序并累乘每日收益率
-  const sortedDates = [...dailyStats.keys()].sort();
-  let compounded = 1;
-  let hasValidData = false;
-
-  for (const date of sortedDates) {
-    const stat = dailyStats.get(date);
-    // 优先使用当天所有基金记录的成本快照和；如果没有，则降级使用当前的持仓总成本
-    const dailyCost = stat.hasCost && stat.cost > 0 ? stat.cost : currentTotalCost;
-
-    if (dailyCost > 0) {
-      const dailyRate = stat.earnings / dailyCost;
-      compounded *= 1 + dailyRate;
-      hasValidData = true;
-    }
-  }
-
-  if (!hasValidData) return null;
-
-  return Number(((compounded - 1) * 100).toFixed(2));
 }

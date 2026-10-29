@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { nowInTz, formatDate } from '../lib/fundHelpers';
+import { nowInMarketTz, formatMarketDate } from '../lib/fundHelpers';
 import { fetchShanghaiIndexDate } from '../api/fund';
 
 /**
@@ -13,8 +13,8 @@ export function useTradingDay() {
   const [isTradingDay, setIsTradingDay] = useState(true); // 默认为交易日，通过接口校正
 
   const checkTradingDay = async () => {
-    const todayStr = formatDate();
-    const now = nowInTz();
+    const todayStr = formatMarketDate();
+    const now = nowInMarketTz();
     const isWeekend = now.day() === 0 || now.day() === 6;
 
     // 周末直接判定为非交易日

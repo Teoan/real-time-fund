@@ -13,7 +13,7 @@ import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from '@
 import { Drawer, DrawerClose, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer';
 import { cn, formatMoney } from '@/lib/utils';
 import { supabase, isSupabaseConfigured } from '@/app/lib/supabase';
-import { calculateYtdReturnRate, mergeAllScopedDailyEarnings, mergeAllHoldings } from '@/app/lib/dailyEarnings';
+import { calculateYtdReturnRate, mergeAllScopedDailyEarnings } from '@/app/lib/dailyEarnings';
 import { storageStore, useStorageStore } from '@/app/stores';
 import { searchFunds } from '@/app/api/fund';
 import { CloseIcon } from './Icons';
@@ -274,11 +274,8 @@ export default function MyEarningsCalendarPage({ open, onOpenChange, series = []
     const computeAndFetchPercentile = async () => {
       try {
         const mergedEarningsMap = mergeAllScopedDailyEarnings(fundDailyEarnings);
-        const globalHoldings = storageStore.getItem('holdings', {});
-        const groupHoldings = storageStore.getItem('groupHoldings', {});
-        const mergedHoldings = mergeAllHoldings(globalHoldings, groupHoldings);
 
-        const rate = calculateYtdReturnRate(mergedEarningsMap, mergedHoldings);
+        const rate = calculateYtdReturnRate(mergedEarningsMap);
 
         if (!isNumber(rate) || !Number.isFinite(rate)) {
           if (!cancelled) {

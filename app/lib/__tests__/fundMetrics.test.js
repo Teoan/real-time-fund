@@ -34,7 +34,8 @@ import {
   computeQuantile,
   computeVaR,
   computeWinRate,
-  detectCalendarOffset
+  detectCalendarOffset,
+  yearsBetweenDates
 } from '../fundMetrics.js';
 import { NAV_RETENTION_DAYS, createFundVolatilityCache } from '../fundVolatilityCache.js';
 import { createFundBenchmarkCache } from '../fundBenchmarkCache.js';
@@ -184,12 +185,44 @@ describe('computeCagr', () => {
     assert.ok(Math.abs(cagr - expected) < 1e-9);
   });
 
+  it('传 options.years 时按真实年数年化（点数有缺口时不再被放大）', () => {
+    const index = [1, 1.21];
+    // 只有一个步长时点数口径会把 21% 当成「一年 252 步」→ 天文数字
+    assert.ok(computeCagr(index) > 1000);
+    const cagr = computeCagr(index, { years: 2 });
+    assert.ok(Math.abs(cagr - 10) < 1e-9, `cagr=${cagr}`);
+    // 非法 years 回退点数口径
+    assert.ok(computeCagr(index, { years: 0 }) > 1000);
+    assert.ok(computeCagr(index, { years: Number.NaN }) > 1000);
+  });
+
+  it('computeFundMetrics 的 CAGR 用净值首尾日期年化，而不是「点数/252」', () => {
+    const rows = buildRows(new Array(300).fill(0.1));
+    const m = computeFundMetrics({ rows });
+    const years = (Date.parse(rows[rows.length - 1].date) - Date.parse(rows[0].date)) / (365.25 * 24 * 60 * 60 * 1000);
+    const ratio = Math.pow(1.001, 300);
+    const expected = (Math.pow(ratio, 1 / years) - 1) * 100;
+    assert.ok(Math.abs(m.cagr - expected) < 0.01, `${m.cagr} vs ${expected}`);
+    // 旧口径（299 点当作 299/252 年）会显著低估
+    const pointBased = (Math.pow(ratio, TRADING_DAYS_PER_YEAR / 299) - 1) * 100;
+    assert.ok(m.cagr - pointBased > 10, `日历年化应明显高于点数口径（${m.cagr} vs ${pointBased}）`);
+  });
+
   it('全零收益 → 0；只剩一个点/非法值 → null', () => {
     assert.equal(computeCagr([1, 1, 1]), 0);
     assert.equal(computeCagr([1]), null);
     assert.equal(computeCagr(null), null);
     assert.equal(computeCagr([1, 0]), null, '指数为 0 时不可取对数增长率');
     assert.equal(computeCagr([1, -2]), null);
+  });
+});
+
+describe('yearsBetweenDates', () => {
+  it('按 365.25 天/年计算，非法输入返回 null', () => {
+    assert.ok(Math.abs(yearsBetweenDates('2024-01-01', '2025-12-31') - 2) < 0.01);
+    assert.equal(yearsBetweenDates(null, '2025-01-01'), null);
+    assert.equal(yearsBetweenDates('2025-01-01', '2025-01-01'), null);
+    assert.equal(yearsBetweenDates('2025-12-31', '2025-01-01'), null, '倒序不算年数');
   });
 });
 
@@ -230,10 +263,11 @@ describe('年化波动率 / 最大回撤 / 下行标准差', () => {
     assert.equal(m.calmar, null);
   });
 
-  it('下行标准差只统计低于 MAR 的部分，分母是全部周期', () => {
+  it('下行标准差只统计低于 MAR 的部分，分母是全部周期（样本口径 n−1）', () => {
     const returns = [1, -2, 3, -4, 5];
     const mar = 0;
-    const expected = Math.sqrt((4 + 16) / 5) * Math.sqrt(TRADING_DAYS_PER_YEAR);
+    // 样本口径 ddof=1（n−1=4），与夏普分母的 annualizeVolatility 对齐
+    const expected = Math.sqrt((4 + 16) / 4) * Math.sqrt(TRADING_DAYS_PER_YEAR);
     assert.ok(Math.abs(computeDownsideDeviation(returns, mar) - expected) < 1e-9);
     // 全部为正 → 0
     assert.equal(computeDownsideDeviation([1, 2, 3], 0), 0);

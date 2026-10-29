@@ -26,7 +26,7 @@ import {
   nowInTz,
   toTz
 } from '../lib/fundHelpers';
-import { calculateYtdReturnRate, mergeAllScopedDailyEarnings, mergeAllHoldings } from '../lib/dailyEarnings';
+import { calculateYtdReturnRate, mergeAllScopedDailyEarnings } from '../lib/dailyEarnings';
 
 export const normalizeFundDailyEarningsScoped = (source) => {
   if (!isPlainObject(source)) return {};
@@ -593,10 +593,9 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
               .filter(Boolean)
           : [];
 
-        // 合并所有 scope 的收益数据和 holdings 来计算 YTD 收益率
+        // 合并所有 scope 的收益数据来计算 YTD 收益率（YTD 只依赖每日成本快照，与持仓无关）
         const mergedEarningsForYtd = mergeAllScopedDailyEarnings(cleanedFundDailyEarnings);
-        const mergedHoldingsForYtd = mergeAllHoldings(cleanedHoldings, cleanedGroupHoldings);
-        const ytdReturnRate = calculateYtdReturnRate(mergedEarningsForYtd, mergedHoldingsForYtd);
+        const ytdReturnRate = calculateYtdReturnRate(mergedEarningsForYtd);
 
         return {
           funds: all.funds,
@@ -621,14 +620,11 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
       } else {
         // 增量同步时，也一并计算并上报 ytdReturnRate，以免云端 ytd_return_rate 长期为空
         try {
-          const rawHoldings = storageStore.getItem('holdings', {});
-          const rawGroupHoldings = storageStore.getItem('groupHoldings', {});
           const rawEarnings = storageStore.getItem('fundDailyEarnings', {});
           const scopedDaily = normalizeFundDailyEarningsScoped(rawEarnings);
-          // 合并所有 scope 的收益数据和 holdings
+          // 合并所有 scope 的收益数据（YTD 只依赖每日成本快照）
           const mergedEarnings = mergeAllScopedDailyEarnings(scopedDaily);
-          const mergedHoldings = mergeAllHoldings(rawHoldings, rawGroupHoldings);
-          const ytdReturnRate = calculateYtdReturnRate(mergedEarnings, mergedHoldings);
+          const ytdReturnRate = calculateYtdReturnRate(mergedEarnings);
           all.ytdReturnRate = ytdReturnRate;
         } catch (e) {
           console.warn('Failed to calculate ytdReturnRate for partial sync', e);

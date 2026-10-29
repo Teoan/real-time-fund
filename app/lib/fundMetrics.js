@@ -241,19 +241,44 @@ export const computeQuantile = (sortedValues, p) => {
 };
 
 /**
+ * 由起止日期算年数（日历口径，365.25 天/年）。
+ * @param {string|null} startDate YYYY-MM-DD
+ * @param {string|null} endDate YYYY-MM-DD
+ * @returns {number|null}
+ */
+export const yearsBetweenDates = (startDate, endDate) => {
+  if (!isString(startDate) || !isString(endDate)) return null;
+  const from = Date.parse(startDate);
+  const to = Date.parse(endDate);
+  if (!isFiniteNumber(from) || !isFiniteNumber(to) || to <= from) return null;
+  return (to - from) / (365.25 * 24 * 60 * 60 * 1000);
+};
+
+/**
  * 几何平均年化收益率（CAGR，%）。
+ *
+ * 年化指数默认用「点数 / 252」，但净值序列一定有空缺（非交易日、停牌、源站缺行），
+ * 点数并不等于真实经过的年数——例如 3 年区间只有 700 个点会被当成 2.78 年，
+ * 年化收益被系统性放大。调用方应传 `options.years`（由 `yearsBetweenDates` 得到）；
+ * 未提供时才回退到点数口径。
  * @param {number[]} adjustedIndex 复权收益指数（升序，首元素为 1）
+ * @param {{ years?: number }} [options]
  * @returns {number|null} 例如 12.3 表示年化 +12.3%
  */
-export const computeCagr = (adjustedIndex) => {
+export const computeCagr = (adjustedIndex, options = {}) => {
   if (!isArray(adjustedIndex) || adjustedIndex.length < 2) return null;
   const steps = adjustedIndex.length - 1;
   const start = adjustedIndex[0];
   const end = adjustedIndex[adjustedIndex.length - 1];
   if (!isFiniteNumber(start) || !isFiniteNumber(end) || start <= 0 || end <= 0) return null;
   if (steps < 1) return null;
+  const years =
+    isObject(options) && isFiniteNumber(options.years) && options.years > 0
+      ? options.years
+      : steps / TRADING_DAYS_PER_YEAR;
+  if (!isFiniteNumber(years) || years <= 0) return null;
   const ratio = end / start;
-  const cagr = (Math.pow(ratio, TRADING_DAYS_PER_YEAR / steps) - 1) * 100;
+  const cagr = (Math.pow(ratio, 1 / years) - 1) * 100;
   return finiteOrNull(cagr);
 };
 
@@ -269,8 +294,10 @@ export const computeArithmeticAnnualizedReturn = (returns) => {
 /**
  * 年化下行标准差（索提诺分母，%）。
  *
- * `DD = sqrt( (1/n) × Σ min(0, r_i − MAR)² ) × √252`，分母是**全部 n 个周期**
- * （下跌日贡献非零项，上涨日贡献 0），这是行业惯用口径。
+ * `DD = sqrt( (1/(n−1)) × Σ min(0, r_i − MAR)² ) × √252`，分母是**全部 n 个周期**
+ * （下跌日贡献非零项，上涨日贡献 0）。这里用样本口径 (n−1)，与夏普分母
+ * `annualizeVolatility` 的 ddof=1 保持一致，否则同一份数据算出的夏普/索提诺不可比
+ * （n=250 时差异约 0.2%，但方向一致、口径统一才可解释）。
  *
  * @param {number[]} returns 日收益率（%）
  * @param {number} [marDaily] 最低可接受日收益（%），默认 0
@@ -282,7 +309,8 @@ export const computeDownsideDeviation = (returns, marDaily = 0) => {
     const diff = r - mar;
     return acc + (diff < 0 ? diff * diff : 0);
   }, 0);
-  const downside = Math.sqrt(sumSquares / returns.length) * Math.sqrt(TRADING_DAYS_PER_YEAR);
+  const ddof = returns.length > 1 ? returns.length - 1 : 1;
+  const downside = Math.sqrt(sumSquares / ddof) * Math.sqrt(TRADING_DAYS_PER_YEAR);
   return finiteOrNull(downside);
 };
 
@@ -536,7 +564,7 @@ export const computeFundMetrics = ({ rows, benchmark = null, riskFreeRate = DEFA
   }
 
   const annualizedVolatility = annualizeVolatility(fundReturns);
-  const cagr = computeCagr(adjustedIndex);
+  const cagr = computeCagr(adjustedIndex, { years: yearsBetweenDates(startDate, endDate) });
   const arithmeticAnnualizedReturn = computeArithmeticAnnualizedReturn(fundReturns);
   const maxDrawdown = computeMaxDrawdown(adjustedIndex);
   const marDaily = rf / TRADING_DAYS_PER_YEAR;
