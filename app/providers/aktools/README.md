@@ -60,9 +60,14 @@ AKShare 只能返回存档数据 —— 实测 00700 / 09988 / 00939 / 03690 的
 
 ### 缓存
 
-序列经 `aktools-daily-cache.js` 做**天级 localStorage 缓存**（键 `aktools:hkValueHistory:{symbol}:{pe|pb}`），
+序列经 `aktools-daily-cache.js` 做**天级缓存**（键 `aktools:hkValueHistory:{symbol}:{pe|pb}`），
 只写入近 5 年窗口（约 914 行/指标）。切换到 baidu 后 `HK_CACHE_VERSION` 已从 1 提升到 2，
 使旧的 eniu 陈旧缓存自动失效（否则会继续用 4 年前的区间算分位）。
+
+**存储后端**：模块本身只依赖一个可注入的适配器（`bindAktoolsCacheStorage`），默认读写 `localStorage`
+（保证纯 node 单测）。应用启动时 `aktoolsStorageBind.js` 注入 `storageStore`，而 `aktools:` 前缀已登记为
+异步键（见 `app/lib/storageAsyncKeys.js`），因此这些缓存实际落在 IndexedDB 的 `kv` 仓库，
+不再占用 localStorage 的 ~5MB 配额。缓存是纯可重建数据，水合前读到空值只会多一次网络请求。
 
 ## 估值区间走势（近 1 月 ~ 成立来）
 

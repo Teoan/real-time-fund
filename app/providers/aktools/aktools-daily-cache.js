@@ -30,7 +30,18 @@
  *   - 仅在浏览器环境使用（localStorage 不存在于 SSR）
  *   - 缓存键按 symbol（6 位代码），不按 secid（避免 1.600519 vs 0.000001 重复存储）
  *   - 缓存体积极小：10 只基金 ×500B = 5KB（对比原来 10MB）
+ *
+ * 存储后端：
+ *   默认读写 `localStorage`（保持纯 node 单测可用）；应用启动时由
+ *   `aktoolsStorageBind.js` 注入 `storageStore` 适配器，从而跟随 P1 的
+ *   「内存镜像 + IndexedDB 大对象」策略——`aktools:` 前缀已登记为异步键，
+ *   港股序列（~45KB/指标）与分位窗口（~22KB/只）不再占 localStorage 配额。
+ *   注：这是纯缓存，水合前读不到只会多一次网络请求，不会丢用户数据。
  */
+
+import lodash from 'lodash';
+
+const { isString } = lodash;
 
 const CACHE_PREFIX = 'aktools:stockFundamentals:';
 /** 港股估值序列缓存前缀（键：`aktools:hkValueHistory:{symbol}:{indicator}`） */
@@ -53,6 +64,51 @@ const CACHE_FAMILIES = {
   [VALUE_WINDOW_CACHE_PREFIX]: VALUE_WINDOW_CACHE_VERSION
 };
 const CACHE_PREFIXES = Object.keys(CACHE_FAMILIES);
+
+/**
+ * 存储适配器：{ getItem(key), setItem(key, rawString), removeItem(key), keysWithPrefix(prefix) }
+ * `getItem` 可以返回原始字符串，也可以返回已解析对象（storageStore 走的是后者）。
+ */
+let storageAdapter = null;
+
+/** 注入存储适配器（应用启动时调用一次，见 aktoolsStorageBind.js） */
+export function bindAktoolsCacheStorage(adapter) {
+  storageAdapter = adapter || null;
+}
+
+const defaultAdapter = {
+  getItem: (key) => {
+    if (typeof localStorage === 'undefined') return null;
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (key, raw) => {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(key, raw);
+  },
+  removeItem: (key) => {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.removeItem(key);
+  },
+  keysWithPrefix: (prefix) => {
+    if (typeof localStorage === 'undefined') return [];
+    const keys = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(prefix)) keys.push(key);
+      }
+    } catch {
+      // ignore
+    }
+    return keys;
+  }
+};
+
+const getStore = () => storageAdapter || defaultAdapter;
 
 /**
  * 从 stock_value_em 的历史序列中提取最新一行并映射为 StockFundamental。
@@ -120,11 +176,10 @@ const hkCacheKey = (symbol, indicator) =>
  * 版本不匹配 / 超过 24h / 时间戳异常 / JSON 损坏 均返回 null。
  */
 const readEntry = (key, version) => {
-  if (typeof localStorage === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
+    const stored = getStore().getItem(key);
+    if (stored === null || stored === undefined || stored === '') return null;
+    const parsed = isString(stored) ? JSON.parse(stored) : stored;
     if (!parsed || parsed._v !== version) return null;
 
     // 检查是否过期：强制 24h 过期
@@ -139,12 +194,25 @@ const readEntry = (key, version) => {
 
 /** 写入一条缓存记录；localStorage 满或不可用时静默忽略 */
 const writeEntry = (key, version, data, extra) => {
-  if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(key, JSON.stringify({ _v: version, ts: Date.now(), ...(extra || {}), data }));
+    getStore().setItem(key, JSON.stringify({ _v: version, ts: Date.now(), ...(extra || {}), data }));
   } catch {
-    // localStorage 满或不可用，静默忽略
+    // 存储满或不可用，静默忽略
   }
+};
+
+/** 枚举本模块全部缓存键 */
+const listCacheKeys = () => {
+  const store = getStore();
+  const keys = new Set();
+  for (const prefix of CACHE_PREFIXES) {
+    try {
+      for (const key of store.keysWithPrefix(prefix) || []) keys.add(key);
+    } catch {
+      // ignore
+    }
+  }
+  return Array.from(keys);
 };
 
 /**
@@ -218,30 +286,30 @@ export const writeCachedStockValueWindow = (symbol, window) => {
  * 覆盖本模块全部缓存族：单股估值最新行 + 港股估值序列。
  */
 export const cleanExpiredAktoolsCache = () => {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    const keysToDelete = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key) continue;
-      const family = CACHE_PREFIXES.find((p) => key.startsWith(p));
-      if (!family) continue;
-      const expectedVersion = CACHE_FAMILIES[family];
-      try {
-        const raw = localStorage.getItem(key);
-        if (!raw) continue;
-        const parsed = JSON.parse(raw);
-        const age = Date.now() - (parsed?.ts || 0);
-        if (age > CACHE_MAX_AGE_MS || age < 0 || parsed?._v !== expectedVersion) {
-          keysToDelete.push(key);
-        }
-      } catch {
+  const store = getStore();
+  const keysToDelete = [];
+  for (const key of listCacheKeys()) {
+    const family = CACHE_PREFIXES.find((p) => key.startsWith(p));
+    if (!family) continue;
+    const expectedVersion = CACHE_FAMILIES[family];
+    try {
+      const stored = store.getItem(key);
+      if (!stored) continue;
+      const parsed = isString(stored) ? JSON.parse(stored) : stored;
+      const age = Date.now() - (parsed?.ts || 0);
+      if (age > CACHE_MAX_AGE_MS || age < 0 || parsed?._v !== expectedVersion) {
         keysToDelete.push(key);
       }
+    } catch {
+      keysToDelete.push(key);
     }
-    keysToDelete.forEach((k) => localStorage.removeItem(k));
-  } catch {
-    // ignore
+  }
+  for (const key of keysToDelete) {
+    try {
+      store.removeItem(key);
+    } catch {
+      // ignore
+    }
   }
 };
 
@@ -255,17 +323,13 @@ export const cleanExpiredAktoolsCache = () => {
  * 与 cleanExpiredAktoolsCache 的区别：后者只删过期/版本不符的条目，本函数全删。
  */
 export const clearAllAktoolsCache = () => {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    const keysToDelete = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key) continue;
-      if (CACHE_PREFIXES.some((p) => key.startsWith(p))) keysToDelete.push(key);
+  const store = getStore();
+  for (const key of listCacheKeys()) {
+    try {
+      store.removeItem(key);
+    } catch {
+      // ignore
     }
-    keysToDelete.forEach((k) => localStorage.removeItem(k));
-  } catch {
-    // ignore
   }
 };
 
@@ -295,25 +359,25 @@ export const cacheStockFundamentalFromRows = (symbol, rows, ctx) => {
  * 覆盖本模块全部缓存族：单股估值最新行 + 港股估值序列。
  */
 export const getAktoolsCacheStats = () => {
-  if (typeof localStorage === 'undefined') return { count: 0, totalBytes: 0 };
+  const store = getStore();
   let count = 0;
   let totalBytes = 0;
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key || !CACHE_PREFIXES.some((p) => key.startsWith(p))) continue;
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        count++;
-        totalBytes += raw.length;
-      }
+  for (const key of listCacheKeys()) {
+    try {
+      const stored = store.getItem(key);
+      if (!stored) continue;
+      count++;
+      totalBytes += isString(stored) ? stored.length : JSON.stringify(stored).length;
+    } catch {
+      // ignore
     }
-  } catch {}
+  }
   return { count, totalBytes };
 };
 
 export const __test__ = {
   extractLatestRow,
+  bindAktoolsCacheStorage,
   CACHE_PREFIX,
   HK_CACHE_PREFIX,
   VALUE_WINDOW_CACHE_PREFIX,

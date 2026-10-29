@@ -29,7 +29,16 @@ export const ASYNC_STORAGE_KEYS = Object.freeze([
 ]);
 
 /** 按前缀命中（分时序列已按基金拆键） */
-export const ASYNC_STORAGE_KEY_PREFIXES = Object.freeze([TIMESERIES_KEY_PREFIX]);
+export const ASYNC_STORAGE_KEY_PREFIXES = Object.freeze([
+  TIMESERIES_KEY_PREFIX,
+  /**
+   * AKTools 天级缓存（纯缓存，可重建）：`aktools:stockFundamentals:` /
+   * `aktools:hkValueHistory:` / `aktools:stockValueWindow:`。
+   * 港股序列 ~45KB/指标、分位窗口 ~22KB/只，时间窗放宽后会明显吃配额。
+   * 水合前读不到只会多一次网络请求，不影响用户数据。
+   */
+  'aktools:'
+]);
 
 /**
  * 该 key 是否登记为大对象（走 IndexedDB）

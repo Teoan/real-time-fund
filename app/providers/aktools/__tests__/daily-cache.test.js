@@ -15,6 +15,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  bindAktoolsCacheStorage,
   getCachedStockFundamental,
   writeCache,
   cacheStockFundamentalFromRows,
@@ -313,5 +314,57 @@ describe('clearAllAktoolsCache', () => {
 
     assert.equal(mockStorage.getItem('customSettings'), '{"a":1}');
     assert.equal(mockStorage.getItem('aktools:stockFundamentals:600519'), null);
+  });
+});
+
+describe('存储适配器绑定（P1：跟随 storageStore 存 IndexedDB）', () => {
+  const makeAdapter = () => {
+    const mem = new Map();
+    return {
+      mem,
+      adapter: {
+        // storageStore.getItem 返回的是已解析对象（不是原始字符串）
+        getItem: (key) => (mem.has(key) ? JSON.parse(mem.get(key)) : null),
+        setItem: (key, value) => mem.set(key, value),
+        removeItem: (key) => mem.delete(key),
+        keysWithPrefix: (prefix) => Array.from(mem.keys()).filter((key) => key.startsWith(prefix))
+      }
+    };
+  };
+
+  it('绑定后读写/清理/统计都走适配器，不碰 localStorage', () => {
+    const { mem, adapter } = makeAdapter();
+    bindAktoolsCacheStorage(adapter);
+    try {
+      writeCache('600519', { updateTime: '2026-10-28T00:00:00.000Z', pe: 30 });
+      assert.equal(mem.size, 1);
+      assert.equal(mockStorage.length, 0, '不应写入 localStorage');
+      assert.equal(getCachedStockFundamental('600519').pe, 30);
+
+      writeCachedStockHkValueHistory('00700', 'pe', [{ date: '2026-10-28', value: 20 }]);
+      assert.equal(getAktoolsCacheStats().count, 2);
+
+      clearAllAktoolsCache();
+      assert.equal(mem.size, 0);
+      assert.equal(getCachedStockFundamental('600519'), null);
+    } finally {
+      bindAktoolsCacheStorage(null);
+    }
+  });
+
+  it('适配器返回的过期记录按 24h 失效', () => {
+    const { mem, adapter } = makeAdapter();
+    bindAktoolsCacheStorage(adapter);
+    try {
+      mem.set(
+        `aktools:stockFundamentals:600519`,
+        JSON.stringify({ _v: 1, ts: Date.now() - 25 * 60 * 60 * 1000, data: { pe: 30 } })
+      );
+      assert.equal(getCachedStockFundamental('600519'), null);
+      cleanExpiredAktoolsCache();
+      assert.equal(mem.size, 0);
+    } finally {
+      bindAktoolsCacheStorage(null);
+    }
   });
 });
