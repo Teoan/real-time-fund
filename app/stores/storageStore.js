@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { isArray, isBoolean, isEqual, isFunction, isObject, isString } from 'lodash';
 import { getFundCodesFromTagRecord } from '@/app/lib/fundHelpers';
 import { DEFAULT_SORT_RULES, SORT_DISPLAY_MODES } from '@/app/constants';
+import { TIMESERIES_KEY_PREFIX, TIMESERIES_SYNC_KEY } from '@/app/lib/storageKeys';
+import { createStoragePersist } from '@/app/lib/storagePersist';
 
 /**
  * 签名函数：用于检测 funds 列表是否发生实质性变更（jzrq, dwjz 等核心字段）
@@ -97,6 +99,58 @@ const SYNC_KEYS = new Set([
 ]);
 
 export { SORT_DISPLAY_MODES, DEFAULT_SORT_RULES };
+
+// =============================================================================================
+// 持久层：内存镜像 + 写合并（实现在 app/lib/storagePersist.js）
+//
+// 分时序列单只 5 日 ≈ 115KB，20 只 ≈ 2.3MB。旧实现每记录一只基金就「读全量 + parse ×2 +
+// isEqual + 全量 stringify 写回」，2.3MB 上约 56ms/次，一轮刷新 20 只 ≈ 1.1s 主线程
+// （默认 30s 一轮），而且 localStorage 读写都是同步 IPC。
+//
+// 现在读走内存镜像、写先进镜像并合并到下一个宏任务落盘（页面隐藏/卸载时立即 flush），
+// 语义变化与失败处理详见 storagePersist.js 顶部说明。
+// =============================================================================================
+
+/** 需要映射到 zustand 状态的 key（只有这些 key 需要 JSON.parse 后 `set()`） */
+const PERSIST_STATE_KEYS = new Set([
+  'funds',
+  'groups',
+  'favorites',
+  'collapsedCodes',
+  'collapsedTrends',
+  'collapsedValuationTrends',
+  'collapsedEarnings',
+  'refreshMs',
+  'holdings',
+  'groupHoldings',
+  'pendingTrades',
+  'transactions',
+  'dcaPlans',
+  'customSettings',
+  'fundDailyEarnings',
+  'fundDividends',
+  'localSortBy',
+  'localSortOrder'
+]);
+
+/** 分键存储 → 逻辑同步键。分时序列按基金拆 key，但云端同步仍按整块处理 */
+const syncKeyOf = (key) => (key.startsWith(TIMESERIES_KEY_PREFIX) ? TIMESERIES_SYNC_KEY : key);
+
+const persist = createStoragePersist({
+  getStorage: () => (typeof window !== 'undefined' ? window.localStorage : null),
+  getWindow: () => (typeof window !== 'undefined' ? window : null),
+  getDocument: () => (typeof document !== 'undefined' ? document : null)
+});
+
+/** 立即把排队的写入落盘（页面隐藏/卸载、测试用） */
+export function flushPendingWrites() {
+  persist.flush();
+}
+
+/** 测试用：丢弃镜像与排队（不影响 localStorage 内容） */
+export function __resetPersistCache() {
+  persist.reset();
+}
 
 export const normalizePendingTrades = (value) => {
   if (!isArray(value)) return [];
@@ -497,80 +551,96 @@ export const useStorageStore = create((set, get) => ({
   },
 
   /**
-   * 核心写入方法：同步更新 localStorage 和 Store 状态，并触发同步
+   * 核心写入方法：先更新内存镜像与 Store 状态，落盘合并到下一轮 flush，并触发同步
+   *
+   * 快路径（最高频场景）：内容与上次写入完全一致 → 直接返回，不解析、不落盘、不触发同步。
    * @param {string} key
    * @param {string} value JSON 字符串或普通字符串
    */
   setItem: (key, value) => {
     const normalizedValue = normalizeStorageValue(key, value);
-    const prevValue = typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
-    let skipStorageWrite = false;
+    if (!persist.available()) return;
 
-    // 检查内容是否真的发生了变化 (使用 lodash isEqual 进行深对比)
-    if (prevValue !== null) {
+    const prevRaw = persist.getRaw(key);
+    if (prevRaw === normalizedValue) return;
+
+    const stateKey = PERSIST_STATE_KEYS.has(key);
+    const syncKey = syncKeyOf(key);
+    const syncKeyHit = SYNC_KEYS.has(syncKey);
+
+    let parsed;
+    let parsedOk = false;
+    if (stateKey || syncKeyHit) {
       try {
-        const parsedNew = JSON.parse(normalizedValue);
-        const parsedOld = JSON.parse(prevValue);
-        if (isEqual(parsedNew, parsedOld)) skipStorageWrite = true;
-      } catch (e) {
-        // 非 JSON 或解析失败时使用字符串直接对比
-        if (prevValue === normalizedValue) skipStorageWrite = true;
+        parsed = JSON.parse(normalizedValue);
+        parsedOk = true;
+      } catch {
+        parsedOk = false;
       }
     }
 
-    // 更新本地存储
-    if (!skipStorageWrite && typeof window !== 'undefined') {
-      window.localStorage.setItem(key, normalizedValue);
+    // 状态键 / 同步键做深比较：key 顺序不同但内容一致时不算变更（不落盘、不触发云同步）
+    let equivalent = false;
+    if (prevRaw !== null && parsedOk && (stateKey || syncKeyHit)) {
+      try {
+        equivalent = isEqual(parsed, JSON.parse(prevRaw));
+      } catch {
+        equivalent = false;
+      }
     }
+
+    // 更新镜像并排队落盘；内容等价（仅 key 顺序不同）时只更新镜像，不重复写盘
+    persist.write(key, normalizedValue, { persist: !equivalent });
 
     // 同步更新 Store 状态，确保 UI 响应
-    try {
-      const parsed = JSON.parse(normalizedValue);
-      if (key === 'funds') set({ funds: parsed });
-      else if (key === 'groups') set({ groups: ensurePresetGroups(parsed) });
-      else if (key === 'favorites') set({ favorites: new Set(parsed) });
-      else if (key === 'collapsedCodes') set({ collapsedCodes: new Set(parsed) });
-      else if (key === 'collapsedTrends') set({ collapsedTrends: new Set(parsed) });
-      else if (key === 'collapsedValuationTrends') set({ collapsedValuationTrends: new Set(parsed) });
-      else if (key === 'collapsedEarnings') set({ collapsedEarnings: new Set(parsed) });
-      else if (key === 'refreshMs') set({ refreshMs: Number(parsed) });
-      else if (key === 'holdings') set({ holdings: parsed });
-      else if (key === 'groupHoldings') set({ groupHoldings: parsed });
-      else if (key === 'pendingTrades') set({ pendingTrades: parsed });
-      else if (key === 'transactions') set({ transactions: parsed });
-      else if (key === 'dcaPlans') set({ dcaPlans: parsed });
-      else if (key === 'customSettings') set({ customSettings: parsed });
-      else if (key === 'fundDailyEarnings') set({ fundDailyEarnings: parsed });
-      else if (key === 'fundDividends') set({ fundDividends: parsed });
-      else if (key === 'localSortBy') set({ sortBy: parsed });
-      else if (key === 'localSortOrder') set({ sortOrder: parsed });
-    } catch (e) {
-      // 如果不是 JSON，或者是 refreshMs 这种数字字符串
-      if (key === 'refreshMs') set({ refreshMs: Number(normalizedValue) });
-      else if (key === 'localSortBy') set({ sortBy: normalizedValue });
-      else if (key === 'localSortOrder') set({ sortOrder: normalizedValue });
+    if (stateKey) {
+      try {
+        if (key === 'funds') set({ funds: parsed });
+        else if (key === 'groups') set({ groups: ensurePresetGroups(parsed) });
+        else if (key === 'favorites') set({ favorites: new Set(parsed) });
+        else if (key === 'collapsedCodes') set({ collapsedCodes: new Set(parsed) });
+        else if (key === 'collapsedTrends') set({ collapsedTrends: new Set(parsed) });
+        else if (key === 'collapsedValuationTrends') set({ collapsedValuationTrends: new Set(parsed) });
+        else if (key === 'collapsedEarnings') set({ collapsedEarnings: new Set(parsed) });
+        else if (key === 'refreshMs') set({ refreshMs: Number(parsed) });
+        else if (key === 'holdings') set({ holdings: parsed });
+        else if (key === 'groupHoldings') set({ groupHoldings: parsed });
+        else if (key === 'pendingTrades') set({ pendingTrades: parsed });
+        else if (key === 'transactions') set({ transactions: parsed });
+        else if (key === 'dcaPlans') set({ dcaPlans: parsed });
+        else if (key === 'customSettings') set({ customSettings: parsed });
+        else if (key === 'fundDailyEarnings') set({ fundDailyEarnings: parsed });
+        else if (key === 'fundDividends') set({ fundDividends: parsed });
+        else if (key === 'localSortBy') set({ sortBy: parsed });
+        else if (key === 'localSortOrder') set({ sortOrder: parsed });
+      } catch {
+        // 非 JSON（如裸字符串排序值）回退为字符串
+        if (key === 'refreshMs') set({ refreshMs: Number(normalizedValue) });
+        else if (key === 'localSortBy') set({ sortBy: normalizedValue });
+        else if (key === 'localSortOrder') set({ sortOrder: normalizedValue });
+      }
     }
 
-    if (skipStorageWrite) return;
+    if (equivalent) return;
 
     // 触发同步逻辑
     const { onSync } = get();
-    if (onSync && SYNC_KEYS.has(key)) {
+    if (onSync && syncKeyHit) {
       // 特殊逻辑：如果是 funds 或 tags，通过签名判断是否真的需要同步
       // 注意：isEqual 已经过滤了完全一致的情况，这里依然保留签名判断
       // 是为了过滤“实质性”无变化的更新（如 jzrq, dwjz 没变，但其他非核心字段变了）
-      if (key === 'funds') {
-        if (getFundCodesSignature(prevValue) === getFundCodesSignature(normalizedValue)) {
+      if (syncKey === 'funds') {
+        if (getFundCodesSignature(prevRaw) === getFundCodesSignature(normalizedValue)) {
           return;
         }
       }
-      if (key === 'tags') {
-        if (getTagsStoreSignature(prevValue) === getTagsStoreSignature(normalizedValue)) {
+      if (syncKey === 'tags') {
+        if (getTagsStoreSignature(prevRaw) === getTagsStoreSignature(normalizedValue)) {
           return;
         }
       }
 
-      onSync(key, prevValue, normalizedValue);
+      onSync(syncKey, prevRaw, normalizedValue);
     }
   },
 
@@ -578,12 +648,14 @@ export const useStorageStore = create((set, get) => ({
    * 删除 key
    */
   removeItem: (key) => {
-    const prevValue = key === 'funds' || key === 'tags' ? window.localStorage.getItem(key) : null;
-    window.localStorage.removeItem(key);
+    if (!persist.available()) return;
+    const prevValue = key === 'funds' || key === 'tags' ? persist.getRaw(key) : null;
+    persist.remove(key);
 
+    const syncKey = syncKeyOf(key);
     const { onSync } = get();
-    if (onSync && SYNC_KEYS.has(key)) {
-      onSync(key, prevValue, null);
+    if (onSync && SYNC_KEYS.has(syncKey)) {
+      onSync(syncKey, prevValue, null);
     }
   },
 
@@ -591,7 +663,8 @@ export const useStorageStore = create((set, get) => ({
    * 清空所有存储
    */
   clear: () => {
-    window.localStorage.clear();
+    persist.reset();
+    if (persist.available()) window.localStorage.clear();
     const { onSync } = get();
     if (onSync) {
       onSync('__clear__', null, null);
@@ -600,15 +673,34 @@ export const useStorageStore = create((set, get) => ({
 
   /**
    * 获取数据（封装 JSON 解析）
+   *
+   * 返回副本，避免调用方原地修改污染内存镜像。
    */
   getItem: (key, defaultValue = null) => {
-    const val = window.localStorage.getItem(key);
-    if (val === null) return defaultValue;
-    try {
-      return JSON.parse(val);
-    } catch (e) {
-      return val;
-    }
+    if (!persist.available()) return defaultValue;
+    const { raw, value } = persist.read(key);
+    if (raw === null) return defaultValue;
+    return value === undefined ? defaultValue : value;
+  },
+
+  /**
+   * 枚举指定前缀的 key（内存镜像 + localStorage 的并集）。
+   * 分时序列拆键后需要靠它枚举有哪些基金，见 app/lib/valuationTimeseries.js。
+   * @param {string} prefix
+   * @returns {Array<string>}
+   */
+  keysWithPrefix: (prefix) => persist.keysWithPrefix(prefix),
+
+  /** 立即把排队的写入落盘（一般不用手动调，页面隐藏/卸载时会自动 flush） */
+  flushPersist: () => flushPendingWrites(),
+
+  /**
+   * 注册写盘失败回调（配额写满等）。`setItem` 已改为延迟落盘，
+   * 因此失败不再同步抛出，需要一个通知出口。
+   * @param {(info: { key: string, error: Error }) => void} handler
+   */
+  setPersistErrorHandler: (handler) => {
+    persist.setErrorHandler(isFunction(handler) ? handler : null);
   }
 }));
 
@@ -617,5 +709,8 @@ export const storageStore = {
   setItem: (key, val) => useStorageStore.getState().setItem(key, val),
   getItem: (key, def) => useStorageStore.getState().getItem(key, def),
   removeItem: (key) => useStorageStore.getState().removeItem(key),
-  clear: () => useStorageStore.getState().clear()
+  clear: () => useStorageStore.getState().clear(),
+  keysWithPrefix: (prefix) => useStorageStore.getState().keysWithPrefix(prefix),
+  flush: () => flushPendingWrites(),
+  setPersistErrorHandler: (handler) => useStorageStore.getState().setPersistErrorHandler(handler)
 };

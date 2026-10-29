@@ -505,35 +505,52 @@ groupId; // 分组ID，如 'group_xxx'
 
 ---
 
-### 18. fundValuationTimeseries
+### 18. fundValuationTimeseries:\*
 
-**类型**: `Object`
-**默认值**: `{}`
+**类型**: 逻辑上 `Object`，物理上按基金拆成多个 key（2026-03 P0 起）
+**默认值**: 无（无数据即无 key）
 **说明**: 存储基金估值分时数据，用于走势图展示
-**云端同步**: 否（测试中功能，暂不同步）
+**云端同步**: 是（懒同步：不主动触发，随其它数据的增量同步一并上报）
 **导入/导出**: 否（数据量较大且属于临时性数据）
 
-**数据结构**:
+**存储形态**:
+
+```text
+fundValuationTimeseries:000001
+fundValuationTimeseries:110022
+...
+```
+
+每个 key 的值：
 
 ```javascript
 {
-  "000001": [  // 按基金代码索引
+  "1": [            // 数据源编号（1=天天基金 fundgz, 2=sina_ds2, 3=sina_ds3）
     {
-      time: string,   // 时间点 "HH:mm"
-      value: number,  // 估算净值
-      date: string    // 日期 "YYYY-MM-DD"
+      date: string,    // "YYYY-MM-DD"
+      time: string,    // "HH:mm"
+      gsz: number,     // 估算净值（= 旧字段 value）
+      gszzl: number,   // 估算涨跌幅（跨日可比，画图默认轴）
+      dwjz: number,    // 参考用单位净值
+      value: number    // gsz 的别名，兼容旧调用方
     }
-  ],
-  "110022": [
-    // ...
   ]
 }
 ```
 
+> 为什么拆 key：旧版把「所有基金 × 所有数据源」放在一个 `fundValuationTimeseries` 里，
+> 每次记录一只基金都要整体 stringify 写回。20 只 × 1200 点 ≈ 2.3MB 时单次写入 ≈ 12ms，
+> 而一轮刷新对每只基金都写一次 → 一轮 ≈ 1.1s 主线程。拆键后单次写入只序列化一只基金。
+> 旧 key 会在首次读取时自动迁移为分键并删除（`app/lib/valuationTimeseries.js` 的
+> `migrateLegacyStorage`），云端同步载荷仍是「整块 `{ code: { ds: points[] } }`」，对服务端无影响。
+
 **数据清理规则**:
 
-- 当新数据日期大于已存储的最大日期时，清空该基金所有旧日期数据，只保留当日分时
-- 同一日期内按时间顺序追加数据
+- 保留最近 `MAX_TRADING_DAYS = 5` 个交易日的点，单日最多 `MAX_POINTS_PER_DAY = 300` 点
+- 单基金单数据源最多 `MAX_TOTAL_POINTS = 1200` 点，超量丢最早的点
+- 同日同分钟去重，保留后写入者
+- 换日期不再整段清空（旧行为会导致分时图永远只有当天、无法跨日比较）
+- 写盘失败（配额写满）降级为纯内存，并通过 `isTimeseriesPersistDegraded()` 提示一次
 
 **使用场景**:
 
@@ -913,6 +930,7 @@ const SYNC_KEYS = new Set([
 
 ## 更新日志
 
+- **2026-10-29**: `fundValuationTimeseries` 改为按基金分键（`fundValuationTimeseries:{code}`），旧 key 自动迁移；`storageStore` 改为「内存镜像 + 写合并」，落盘推迟到下一个宏任务，配额失败改为回调通知
 - **2026-05-25**: 检查并更新 `funds` 基金数据结构，详尽补充基金对象所有可能的属性字段（如 `lastNav`, `zzl`, `yesterdayZzl`, `yesterdayNavDelta`, `noValuation`, `valuationSource`, `dataSource`, `addedAt`, `addBaseNav`, `addBaseDate` 等），剔除了非实际存在的 legacy `type` 字段，并修正 `dwjz` 的类型说明为字符串类型。
 - **2026-04-13**: 完善 `fundDailyEarnings` 文档（更新为按作用域分桶结构，补充旧版兼容说明）；补充 `customSettings` 中 `showGroupFundSearchPc`、`showGroupFundSearchMobile` 字段；完善导入/导出格式说明（新增 `customSettings`、`fundDailyEarnings`、`collapsedEarnings` 导出支持）；新增导入合并策略详细表格；补充 storageHelper 同步键集合；为每个键标注导入/导出和云端同步状态
 - **2026-04-05（分组独立持仓）**: 新增 `groupHoldings`；`pendingTrades` / `transactions` 支持可选 `groupId`；`dcaPlans` 改为分桶结构（`__global__` + 分组 ID）；同步键与导入导出格式已更新；说明分组持仓从历史全局 `holdings` 的幂等深拷贝迁移规则

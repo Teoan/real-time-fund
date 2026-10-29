@@ -27,6 +27,7 @@ import {
   toTz
 } from '../lib/fundHelpers';
 import { calculateYtdReturnRate, mergeAllScopedDailyEarnings } from '../lib/dailyEarnings';
+import { getAllValuationSeriesRaw, replaceAllValuationSeriesRaw } from '../lib/valuationTimeseries';
 
 export const normalizeFundDailyEarningsScoped = (source) => {
   if (!isPlainObject(source)) return {};
@@ -396,7 +397,7 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
     try {
       const all = {};
       if (!keys || keys.has('fundValuationTimeseries')) {
-        all.fundValuationTimeseries = storageStore.getItem('fundValuationTimeseries', {});
+        all.fundValuationTimeseries = getAllValuationSeriesRaw();
       }
       if (!keys || keys.has('funds')) {
         all.funds = storageStore.getItem('funds', []);
@@ -1119,7 +1120,7 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
           const nextTimeseries = isPlainObject(cloudData.fundValuationTimeseries)
             ? cloudData.fundValuationTimeseries
             : {};
-          const localTimeseries = storageStore.getItem('fundValuationTimeseries', {});
+          const localTimeseries = getAllValuationSeriesRaw();
           const mergedTimeseries = { ...localTimeseries };
 
           const mergeSeries = (cloudArr, localArr) => {
@@ -1166,7 +1167,7 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
               cleanedTimeseries[code] = mergedTimeseries[code];
             }
           });
-          storageStore.setItem('fundValuationTimeseries', JSON.stringify(cleanedTimeseries));
+          replaceAllValuationSeriesRaw(cleanedTimeseries);
         }
 
         if (isPlainObject(cloudData.customSettings)) {

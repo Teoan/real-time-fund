@@ -7,6 +7,10 @@
  */
 import { storageStore } from '@/app/stores';
 
-import { bindTimeseriesStorage } from './valuationTimeseries.js';
+import { bindTimeseriesStorage, notifyPersistError } from './valuationTimeseries.js';
 
 bindTimeseriesStorage(storageStore);
+
+// `storageStore.setItem` 改为「内存镜像 + 延迟落盘」后，配额写满不再同步抛错，
+// 分时序列的「已降级为纯内存」标记改由这个回调点亮。
+storageStore.setPersistErrorHandler((info) => notifyPersistError(info));
