@@ -21,8 +21,11 @@
 /** 数据库名 */
 export const FUND_VOLATILITY_DB_NAME = 'fundVolatility';
 
-/** 数据库版本（新增对象仓库时必须 +1，并在 upgrade 里补建） */
-export const FUND_VOLATILITY_DB_VERSION = 2;
+/**
+ * 数据库版本（新增对象仓库时必须 +1，并在 upgrade 里补建）
+ * v3：新增通用 KV 仓库 `kv`，用于承接 P1 从 localStorage 迁出的大对象
+ */
+export const FUND_VOLATILITY_DB_VERSION = 3;
 
 /**
  * 对象仓库：对应规格 §3 的四类缓存数据 + 基金指标所需的业绩基准序列
@@ -41,7 +44,13 @@ export const IDB_STORES = Object.freeze({
    * 同一基准被多只基金共享（沪深300 一条数据服务几百只基金），按基金代码存会成倍放大存储。
    * 因此它也**不**参与 fundVolatilityCache.clearFund 的按基金清理。
    */
-  BENCHMARK: 'fundBenchmark'
+  BENCHMARK: 'fundBenchmark',
+  /**
+   * 通用 KV：key 是 storageStore 的存储键，value 是原始 JSON 字符串。
+   * 只承接显式登记为大对象的键（见 app/lib/storageAsyncKeys.js），
+   * 其余键仍留在 localStorage，避免把首屏同步读变成异步。
+   */
+  KV: 'kv'
 });
 
 const STORE_NAMES = Object.freeze(Object.values(IDB_STORES));
@@ -205,6 +214,57 @@ export const idbDelete = async (storeName, key) => {
 };
 
 /**
+ * 在一个事务里批量写入（entries 中 value 为 null 表示删除该 key）。
+ * 批量而非逐条，是为了让一次刷新里几十个键只提交一次事务。
+ * @param {string} storeName
+ * @param {Array<[string, any]>} entries
+ * @returns {Promise<boolean>}
+ */
+export const idbSetMany = async (storeName, entries) => {
+  if (!STORE_NAMES.includes(storeName)) return false;
+  if (!Array.isArray(entries) || !entries.length) return true;
+  const db = await openFundVolatilityDb();
+  if (!db) return false;
+  try {
+    const tx = db.transaction(storeName, 'readwrite');
+    const done = transactionDone(tx);
+    done.catch(() => {});
+    const store = tx.objectStore(storeName);
+    for (const [key, value] of entries) {
+      if (key == null) continue;
+      if (value === null) store.delete(String(key));
+      else store.put(value, String(key));
+    }
+    await done;
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * 读取整个仓库的 [key, value] 列表（用于启动水合）。
+ * @returns {Promise<Array<[IDBValidKey, any]>|null>} 不可用时 null（与「空仓库的 []」区分开）
+ */
+export const idbGetAllEntries = async (storeName) => {
+  if (!STORE_NAMES.includes(storeName)) return null;
+  const db = await openFundVolatilityDb();
+  if (!db) return null;
+  try {
+    const tx = db.transaction(storeName, 'readonly');
+    const done = transactionDone(tx);
+    done.catch(() => {});
+    const store = tx.objectStore(storeName);
+    // 同一事务内并发两个请求是合法的；keys 与 values 顺序一致
+    const [keys, values] = await Promise.all([requestToPromise(store.getAllKeys()), requestToPromise(store.getAll())]);
+    await done;
+    return keys.map((key, index) => [key, values[index]]);
+  } catch {
+    return null;
+  }
+};
+
+/**
  * 清空某个仓库（用于数据结构升级后的一次性重置）。
  * @returns {Promise<boolean>}
  */
@@ -213,8 +273,13 @@ export const idbClearStore = async (storeName) => {
   return res.ok;
 };
 
-/** 清空全部对象仓库 */
+/**
+ * 清空全部**缓存**仓库。
+ * ⚠️ 不含 KV：kv 里是用户数据（交易、每日收益等），只能由 storageStore.clear() 显式清空，
+ *    不能被「清缓存」这类操作顺带删掉。
+ */
 export const idbClearAll = async () => {
-  const results = await Promise.all(STORE_NAMES.map((name) => idbClearStore(name)));
+  const cacheStores = STORE_NAMES.filter((name) => name !== IDB_STORES.KV);
+  const results = await Promise.all(cacheStores.map((name) => idbClearStore(name)));
   return results.every(Boolean);
 };

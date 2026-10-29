@@ -4,7 +4,21 @@
 
 ## 概述
 
-项目使用 localStorage 来持久化用户的基金数据、配置和状态。所有数据都以 JSON 字符串格式存储（除简单字符串外）。
+项目用浏览器本地存储持久化用户数据。逻辑上只有一个入口 `storageStore`，物理上分两层：
+
+| 层       | 介质                                          | 存放内容                                                                                                           | 读写方式                                               |
+| -------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| 镜像层   | 进程内存                                      | 全部键的原始 JSON 字符串 + 解析结果                                                                                | 同步，命中即返回（返回副本）                           |
+| 持久层 A | `localStorage`                                | 小对象与首屏同步读的键（funds / groups / holdings / 配置等）                                                       | 排队后下一个宏任务落盘，同键合并                       |
+| 持久层 B | IndexedDB（`fundVolatility` v3 的 `kv` 仓库） | 大对象：`fundValuationTimeseries:*` / `fundDailyEarnings` / `fundDividends` / `transactions` / `valuationAccuracy` | 启动时水合进镜像，之后同步读；写入排队后单事务批量落盘 |
+
+几个要点：
+
+- **所有业务读写都必须走 `storageStore`**（或 React 里的 `useStorageStore`）。绕过它直写 `window.localStorage` 会因为镜像仍是旧值而读到过期数据。
+- `localStorage` 里因为写入合并而暂时落后于镜像，**第三方直接读 `window.localStorage` 会看到旧值**。
+- 大对象键由 `app/lib/storageAsyncKeys.js` 登记（`ASYNC_STORAGE_KEYS` / `ASYNC_STORAGE_KEY_PREFIXES`）。新增键时判断标准：单条 ≥ 200KB，或写入频繁且读取不在首屏同步路径。首屏同步读的键**不能**迁。
+- IndexedDB 不可用（隐私模式、策略禁用、老浏览器）或写入失败时自动退回 `localStorage`，行为与迁移前一致，不丢数据。
+- 启动时 `app/page.jsx` 在 `initXxx()` 之前 `await hydrateStorage()`，所以首屏同步读拿到的就是水合后的值。
 
 ---
 
@@ -930,6 +944,7 @@ const SYNC_KEYS = new Set([
 
 ## 更新日志
 
+- **2026-10-29（P1 大对象迁 IndexedDB）**: 新增 `app/lib/storagePersist.js` 的异步后端（IndexedDB `kv` 仓库，DB 版本 3）与 `app/lib/storageAsyncKeys.js` 登记表；`fundValuationTimeseries:*` / `fundDailyEarnings` / `fundDividends` / `transactions` / `valuationAccuracy` 改存 IndexedDB，启动时 `hydrateStorage()` 水合进镜像后同步读不变；`localStorage` 里遗留的同名键在首次水合时自动迁入并删除；跨标签页写入改由 `BroadcastChannel`（`rtf-storage-writes`，只发 key）通知；`idbClearAll()` 不再清 `kv` 仓库（那是用户数据，不是缓存）
 - **2026-10-29**: `fundValuationTimeseries` 改为按基金分键（`fundValuationTimeseries:{code}`），旧 key 自动迁移；`storageStore` 改为「内存镜像 + 写合并」，落盘推迟到下一个宏任务，配额失败改为回调通知
 - **2026-05-25**: 检查并更新 `funds` 基金数据结构，详尽补充基金对象所有可能的属性字段（如 `lastNav`, `zzl`, `yesterdayZzl`, `yesterdayNavDelta`, `noValuation`, `valuationSource`, `dataSource`, `addedAt`, `addBaseNav`, `addBaseDate` 等），剔除了非实际存在的 legacy `type` 字段，并修正 `dwjz` 的类型说明为字符串类型。
 - **2026-04-13**: 完善 `fundDailyEarnings` 文档（更新为按作用域分桶结构，补充旧版兼容说明）；补充 `customSettings` 中 `showGroupFundSearchPc`、`showGroupFundSearchMobile` 字段；完善导入/导出格式说明（新增 `customSettings`、`fundDailyEarnings`、`collapsedEarnings` 导出支持）；新增导入合并策略详细表格；补充 storageHelper 同步键集合；为每个键标注导入/导出和云端同步状态

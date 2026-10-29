@@ -899,8 +899,20 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
       });
     };
     window.addEventListener('storage', onStorage);
+    // 大对象（fundDailyEarnings 等）存在 IndexedDB，浏览器不发 storage 事件，
+    // 由 storagePersist 的 BroadcastChannel 补一个「只带 key」的通知。
+    if (isFunction(storageStore.setExternalWriteHandler)) {
+      storageStore.setExternalWriteHandler((key) => {
+        if (!isString(key)) return;
+        if (!keys.has(key)) return;
+        scheduleSync();
+      });
+    }
     return () => {
       window.removeEventListener('storage', onStorage);
+      if (isFunction(storageStore.setExternalWriteHandler)) {
+        storageStore.setExternalWriteHandler(null);
+      }
       if (syncDebounceRef.current) clearTimeout(syncDebounceRef.current);
     };
   }, [scheduleSync]);

@@ -34,6 +34,7 @@ Core utilities: Supabase client, React Query client factory + query keys, tradin
 - **fundReport.js**: 只做「历史指标判读」，文案不出现买卖建议语义；缺失指标一律不判读（不补 0 分）；`limitations` 与免责声明是报告的固定组成部分。Scores use **ascending-sorted anchor interpolation** — anchors written descending (max drawdown, VaR) must be sorted before interpolating, otherwise deep drawdowns score as best (there is a regression test for this)
 - **Tests**: `node --test "app/lib/__tests__/*.test.js"` (no npm script, not run by CI)
 - **storageStore 持久层**: 读走内存镜像、写合并到下一个宏任务落盘（实现在 `storagePersist.js`，纯 lodash 依赖、可单测）。任何绕过 `storageStore` 直写 `localStorage` 的模块都拿不到这层收益，也可能读到滞后值——新增 key 必须走 `storageStore`
+- **大对象存 IndexedDB**: 由 `storageAsyncKeys.js` 登记（`ASYNC_STORAGE_KEYS` + `ASYNC_STORAGE_KEY_PREFIXES`），经 `storagePersist.js` 的 `asyncBackend`（`idbStorageBackend.js` → `idb.js` 的 `kv` 仓库）落盘。`page.jsx` 必须在首屏那批 `initXxx()` 之前 `await hydrateStorage()`，否则同步读拿到空值；首屏同步读的键不能登记为异步键。后端不可用时自动退回 `localStorage`（行为与迁移前一致）。跨标签页写入由 `BroadcastChannel`（`rtf-storage-writes`，只发 key、不发值）通知，`useSyncManager` 据此 `scheduleSync()`
 
 ## ANTI-PATTERNS (THIS DIRECTORY)
 

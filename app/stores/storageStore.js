@@ -4,6 +4,8 @@ import { getFundCodesFromTagRecord } from '@/app/lib/fundHelpers';
 import { DEFAULT_SORT_RULES, SORT_DISPLAY_MODES } from '@/app/constants';
 import { TIMESERIES_KEY_PREFIX, TIMESERIES_SYNC_KEY } from '@/app/lib/storageKeys';
 import { createStoragePersist } from '@/app/lib/storagePersist';
+import { isAsyncStorageKey } from '@/app/lib/storageAsyncKeys';
+import { createIdbStorageBackend } from '@/app/lib/idbStorageBackend';
 
 /**
  * 签名函数：用于检测 funds 列表是否发生实质性变更（jzrq, dwjz 等核心字段）
@@ -139,12 +141,25 @@ const syncKeyOf = (key) => (key.startsWith(TIMESERIES_KEY_PREFIX) ? TIMESERIES_S
 const persist = createStoragePersist({
   getStorage: () => (typeof window !== 'undefined' ? window.localStorage : null),
   getWindow: () => (typeof window !== 'undefined' ? window : null),
-  getDocument: () => (typeof document !== 'undefined' ? document : null)
+  getDocument: () => (typeof document !== 'undefined' ? document : null),
+  // 大对象（分时序列 / 每日收益 / 交易流水等）改存 IndexedDB，启动时水合进镜像。
+  // 后端不可用（隐私模式、策略禁用、老浏览器）会自动退回 localStorage。
+  isAsyncKey: isAsyncStorageKey,
+  asyncBackend: typeof window !== 'undefined' ? createIdbStorageBackend() : null
 });
 
 /** 立即把排队的写入落盘（页面隐藏/卸载、测试用） */
 export function flushPendingWrites() {
   persist.flush();
+}
+
+/**
+ * 启动水合：把 IndexedDB 里的大对象灌进内存镜像。
+ * 必须在首屏那批 initXxx() 同步读之前 await（见 app/page.jsx）。
+ * @returns {Promise<{ hydrated: boolean, degraded?: boolean, loaded?: number, migrated?: number }>}
+ */
+export function hydrateStorage() {
+  return persist.hydrate();
 }
 
 /** 测试用：丢弃镜像与排队（不影响 localStorage 内容） */
@@ -664,11 +679,11 @@ export const useStorageStore = create((set, get) => ({
   },
 
   /**
-   * 清空所有存储
+   * 清空所有存储（localStorage + IndexedDB 大对象 + 内存镜像）
    */
   clear: () => {
-    persist.reset();
     if (persist.available()) window.localStorage.clear();
+    void persist.clearAll();
     const { onSync } = get();
     if (onSync) {
       onSync('__clear__', null, null);
@@ -705,6 +720,15 @@ export const useStorageStore = create((set, get) => ({
    */
   setPersistErrorHandler: (handler) => {
     persist.setErrorHandler(isFunction(handler) ? handler : null);
+  },
+
+  /**
+   * 注册「其他标签页写入了某个键」的回调。
+   * 大对象存 IndexedDB 后没有 storage 事件，改由 BroadcastChannel 通知（只发 key、不发值）。
+   * @param {(key: string) => void} handler
+   */
+  setExternalWriteHandler: (handler) => {
+    persist.setExternalWriteHandler(isFunction(handler) ? handler : null);
   }
 }));
 
@@ -716,5 +740,6 @@ export const storageStore = {
   clear: () => useStorageStore.getState().clear(),
   keysWithPrefix: (prefix) => useStorageStore.getState().keysWithPrefix(prefix),
   flush: () => flushPendingWrites(),
-  setPersistErrorHandler: (handler) => useStorageStore.getState().setPersistErrorHandler(handler)
+  setPersistErrorHandler: (handler) => useStorageStore.getState().setPersistErrorHandler(handler),
+  setExternalWriteHandler: (handler) => useStorageStore.getState().setExternalWriteHandler(handler)
 };

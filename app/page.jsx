@@ -62,7 +62,14 @@ import { useScanImport } from './hooks/useScanImport';
 import { useRefreshManager } from './hooks/useRefreshManager';
 import { useSyncManager, normalizeFundDailyEarningsScoped } from './hooks/useSyncManager';
 import { useIsMobile } from './hooks/useIsMobile';
-import { useStorageStore, storageStore, normalizePendingTrades, useModalStore, useSettingsStore } from './stores';
+import {
+  useStorageStore,
+  storageStore,
+  normalizePendingTrades,
+  hydrateStorage,
+  useModalStore,
+  useSettingsStore
+} from './stores';
 import ModalsLayer from './components/ModalsLayer';
 
 import {
@@ -2612,6 +2619,14 @@ export default function HomePage() {
   useEffect(() => {
     let cancelled = false;
     const init = async () => {
+      // 大对象（分时序列 / 每日收益 / 交易流水等）存在 IndexedDB，先水合进内存镜像，
+      // 否则下面的 initXxx() 同步读会拿到空值。后端不可用时自动退回 localStorage，不阻塞启动。
+      try {
+        await hydrateStorage();
+      } catch {
+        /* 降级：直接读 localStorage */
+      }
+      if (cancelled) return;
       initFunds();
       initGroups();
       initFavorites();
