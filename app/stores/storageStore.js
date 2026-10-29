@@ -567,10 +567,14 @@ export const useStorageStore = create((set, get) => ({
     const stateKey = PERSIST_STATE_KEYS.has(key);
     const syncKey = syncKeyOf(key);
     const syncKeyHit = SYNC_KEYS.has(syncKey);
+    // 分时序列的分键（每只基金 ~107KB）：同步侧只用到 key，不读值，
+    // 所以既不需要解析也不需要深比较，省掉一轮刷新 20 次 × 2 次 parse
+    const timeseriesSubKey = syncKey !== key;
+    const needsParse = stateKey || (syncKeyHit && !timeseriesSubKey);
 
     let parsed;
     let parsedOk = false;
-    if (stateKey || syncKeyHit) {
+    if (needsParse) {
       try {
         parsed = JSON.parse(normalizedValue);
         parsedOk = true;
@@ -581,7 +585,7 @@ export const useStorageStore = create((set, get) => ({
 
     // 状态键 / 同步键做深比较：key 顺序不同但内容一致时不算变更（不落盘、不触发云同步）
     let equivalent = false;
-    if (prevRaw !== null && parsedOk && (stateKey || syncKeyHit)) {
+    if (needsParse && prevRaw !== null && parsedOk) {
       try {
         equivalent = isEqual(parsed, JSON.parse(prevRaw));
       } catch {
