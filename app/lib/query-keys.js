@@ -98,6 +98,35 @@ export const aktoolsFundHoldings = (code, yearOrLatest) => [
   String(yearOrLatest || 'latest')
 ];
 
+/** @param {string} code - 基金基本概况（fund_overview_em：费率/规模/成立日） */
+export const aktoolsFundOverview = (code) => ['aktools', 'fundOverview', String(code || '').trim()];
+
+/** @param {string} code - 申赎费率阶梯（fund_individual_detail_info_xq） */
+export const aktoolsFundFeeTiers = (code) => ['aktools', 'fundFeeTiers', String(code || '').trim()];
+
+/** @param {string} code - 分红送配明细（fund_open_fund_info_em） */
+export const aktoolsFundDividendDetail = (code) => ['aktools', 'fundDividendDetail', String(code || '').trim()];
+
+/** @param {string} code - 同业位置/同类排名（fund_individual_achievement_xq） */
+export const aktoolsFundAchievement = (code) => ['aktools', 'fundAchievement', String(code || '').trim()];
+
+/** @param {string} code - 持有盈利概率（fund_individual_profit_probability_xq） */
+export const aktoolsFundProfitProbability = (code) => ['aktools', 'fundProfitProbability', String(code || '').trim()];
+
+/** @param {string} code - 行业配置（fund_portfolio_industry_allocation_em） */
+export const aktoolsFundIndustryAllocation = (code) => ['aktools', 'fundIndustryAllocation', String(code || '').trim()];
+
+/** @param {string} code - 债券持仓（fund_portfolio_bond_hold_em） */
+export const aktoolsFundBondHoldings = (code) => ['aktools', 'fundBondHoldings', String(code || '').trim()];
+
+/** @param {string} code @param {string} indicator - 重大变动/调仓（fund_portfolio_change_em） */
+export const aktoolsFundPortfolioChange = (code, indicator) => [
+  'aktools',
+  'fundPortfolioChange',
+  String(code || '').trim(),
+  String(indicator || '累计买入')
+];
+
 /**
  * stock_value_em 原始历史行缓存键（getStockFundamentals 与 getStockValueHistory 共用同一份数据）
  * @param {string} symbol - 6 位 A 股代码

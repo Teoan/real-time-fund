@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { isNumber, isString } from 'lodash';
 import dayjs from 'dayjs';
 import { FileText } from 'lucide-react';
@@ -7,6 +8,12 @@ import { FileText } from 'lucide-react';
 import { useFundMetrics } from '@/app/hooks/useFundMetrics';
 import { MIN_METRIC_SAMPLES } from '@/app/lib/fundMetrics';
 import { buildFundResearchReport } from '@/app/lib/fundReport';
+import {
+  fetchFundProfileOverview,
+  fetchFundFeeTiers,
+  fetchFundAchievement,
+  fetchFundProfitProbability
+} from '@/app/api/fund';
 import { useModalStore } from '@/app/stores';
 
 /**
@@ -180,17 +187,38 @@ export default function FundMetricsPanel({ code, name = '', riskFreeRate }) {
 
   const metrics = data?.metrics;
   const insufficient = !metrics || metrics.insufficient;
+  /** 生成报告时并发拉档案数据，期间禁用按钮防重复点击 */
+  const [reportBusy, setReportBusy] = useState(false);
 
-  /** 现算报告并打开弹框（报告只依赖已加载的指标，点击即可出，无需异步） */
-  const openReport = () => {
-    if (!metrics || insufficient) return;
-    const report = buildFundResearchReport({
-      code,
-      name,
-      metrics,
-      generatedAt: formatNow()
-    });
-    useModalStore.setState({ fundReportModal: { open: true, report } });
+  /**
+   * 生成报告：先并发拉取「档案增强数据」（基金档案/费率阶梯/同业业绩/持有概率），
+   * 任一接口失败都降级为 null —— 报告主体只依赖已加载的指标，绝不让外部数据阻塞出报告。
+   */
+  const openReport = async () => {
+    if (!metrics || insufficient || reportBusy) return;
+    setReportBusy(true);
+    try {
+      const safe = (p) => p.catch(() => null);
+      const [profile, feeTiers, achievement, probability] = await Promise.all([
+        safe(fetchFundProfileOverview(code)),
+        safe(fetchFundFeeTiers(code)),
+        safe(fetchFundAchievement(code)),
+        safe(fetchFundProfitProbability(code))
+      ]);
+      const report = buildFundResearchReport({
+        code,
+        name,
+        metrics,
+        generatedAt: formatNow(),
+        profile,
+        feeTiers,
+        achievement,
+        probability
+      });
+      useModalStore.setState({ fundReportModal: { open: true, report } });
+    } finally {
+      setReportBusy(false);
+    }
   };
 
   return (
@@ -215,8 +243,8 @@ export default function FundMetricsPanel({ code, name = '', riskFreeRate }) {
         <button
           type="button"
           onClick={openReport}
-          disabled={insufficient}
-          title={insufficient ? '净值样本不足，暂无法生成报告' : '基于当前指标生成一份调研初步报告'}
+          disabled={insufficient || reportBusy}
+          title={insufficient ? '净值样本不足，暂无法生成报告' : '基于当前指标 + 基金档案生成一份调研初步报告'}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -233,7 +261,7 @@ export default function FundMetricsPanel({ code, name = '', riskFreeRate }) {
           }}
         >
           <FileText size={12} />
-          调研初步报告
+          {reportBusy ? '生成中…' : '调研初步报告'}
         </button>
       </div>
       {isLoading ? (

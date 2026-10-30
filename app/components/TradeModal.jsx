@@ -6,7 +6,8 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { isNumber, isUndefined } from 'lodash';
-import { fetchFundPingzhongdata, fetchSmartFundNetValue } from '../api/fund';
+import { useQuery } from '@tanstack/react-query';
+import { fetchFundPingzhongdata, fetchSmartFundNetValue, fetchFundFeeTiers } from '../api/fund';
 import { DatePicker, NumericInput } from './Common';
 import ConfirmModal from './ConfirmModal';
 import { CloseIcon } from './Icons';
@@ -17,9 +18,14 @@ import PendingTradesModal from './PendingTradesModal';
 import { Spinner } from '@/components/ui/spinner';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { formatMoney } from '@/lib/utils';
+import { buildFeeTierRows, getSubscriptionFee, formatFeeRate } from '@/app/lib/fundFees';
+import * as qk from '@/app/lib/query-keys';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
+
+/** 费率阶梯属于披露口径，一天内不会变 */
+const FEE_TIERS_STALE_MS = 24 * 60 * 60 * 1000;
 
 import { DEFAULT_TZ } from '@/app/constants';
 const getBrowserTimeZone = () => {
@@ -101,10 +107,47 @@ export default function TradeModal({ type, fund, holding, onClose, onConfirm, pe
     };
   }, [isBuy, fund?.code]);
 
+  // ---- AKShare 费率阶梯（AKTools）：申购/赎回分档，取不到就退回单档费率 ----
+  const feeTiersQuery = useQuery({
+    queryKey: qk.aktoolsFundFeeTiers(fund?.code),
+    queryFn: () => fetchFundFeeTiers(fund.code),
+    enabled: Boolean(fund?.code),
+    staleTime: FEE_TIERS_STALE_MS,
+    retry: 0
+  });
+  const feeTiers = feeTiersQuery.data?.hasTiers ? feeTiersQuery.data : null;
+  /** 用户手改过费率后不再被分档覆盖 */
+  const [feeRateTouched, setFeeRateTouched] = useState(false);
+  const [showFeeTiers, setShowFeeTiers] = useState(false);
+
+  const amountNumber = useMemo(() => parseNumberish(amount), [amount]);
+
+  // 金额变化 → 按分档自动回填申购费率（仅当用户未手改、且该档是百分比费率时）
+  useEffect(() => {
+    if (!isBuy || feeRateTouched || !feeTiers) return;
+    if (!Number.isFinite(amountNumber) || amountNumber <= 0) return;
+    const { rate, fixedFee } = getSubscriptionFee(feeTiers, amountNumber);
+    // 固定费用档（如「1000 元/笔」）无法用百分比表达，只在提示里说明
+    if (fixedFee !== null && !isUndefined(fixedFee)) return;
+    if (isNumber(rate)) setFeeRate(rate.toFixed(2));
+  }, [isBuy, amountNumber, feeTiers, feeRateTouched]);
+
+  const subscriptionFee = useMemo(() => {
+    if (!feeTiers || !Number.isFinite(amountNumber)) return null;
+    return getSubscriptionFee(feeTiers, amountNumber);
+  }, [feeTiers, amountNumber]);
+
+  const buyTierHint = useMemo(() => {
+    if (!subscriptionFee?.tier) return null;
+    const rows = buildFeeTierRows([subscriptionFee.tier], 'amount');
+    const label = rows[0]?.rangeText || '';
+    const rateText = formatFeeRate(subscriptionFee.rate, subscriptionFee.fixedFee);
+    return label ? `${label} → ${rateText}` : rateText;
+  }, [subscriptionFee]);
+
   const currentPendingTrades = useMemo(() => {
     return pendingTrades.filter((t) => t.fundCode === fund?.code);
   }, [pendingTrades, fund]);
-
   const pendingSellShare = useMemo(() => {
     return currentPendingTrades
       .filter((t) => t.type === 'sell')
@@ -509,7 +552,17 @@ export default function TradeModal({ type, fund, holding, onClose, onConfirm, pe
                             borderRadius: 12
                           }}
                         >
-                          <NumericInput value={feeRate} onChange={setFeeRate} step={0.1} min={0} placeholder="0.12" />
+                          <NumericInput
+                            value={feeRate}
+                            onChange={(v) => {
+                              // 手改后不再被分档自动覆盖
+                              setFeeRateTouched(true);
+                              setFeeRate(v);
+                            }}
+                            step={0.1}
+                            min={0}
+                            placeholder="0.12"
+                          />
                         </div>
                       </div>
                       <div className="form-group" style={{ flex: 1 }}>
@@ -519,6 +572,54 @@ export default function TradeModal({ type, fund, holding, onClose, onConfirm, pe
                         <DatePicker value={date} onChange={setDate} />
                       </div>
                     </div>
+
+                    {feeTiers ? (
+                      <div style={{ marginBottom: 12, fontSize: '12px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                          <span className="muted" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {buyTierHint ? `按金额分档：${buyTierHint}` : '申购费率按金额分档'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setShowFeeTiers((v) => !v)}
+                            style={{
+                              flexShrink: 0,
+                              background: 'none',
+                              border: 'none',
+                              color: 'var(--primary)',
+                              fontSize: '12px',
+                              cursor: 'pointer',
+                              padding: 0
+                            }}
+                          >
+                            {showFeeTiers ? '收起' : '查看阶梯'}
+                          </button>
+                        </div>
+                        {showFeeTiers ? (
+                          <div
+                            style={{
+                              marginTop: 6,
+                              border: '1px solid var(--border)',
+                              borderRadius: 8,
+                              padding: '6px 8px'
+                            }}
+                          >
+                            {buildFeeTierRows(feeTiers.buy, 'amount').map((r, i) => (
+                              <div
+                                key={i}
+                                style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}
+                              >
+                                <span className="muted">{r.rangeText}</span>
+                                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{r.rateText}</span>
+                              </div>
+                            ))}
+                            <div className="muted" style={{ marginTop: 4, opacity: 0.7 }}>
+                              手动修改费率后不再自动回填；实际扣费以确认单为准。
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
 
                     <div className="form-group" style={{ marginBottom: 12 }}>
                       <label className="muted" style={{ display: 'block', marginBottom: 8, fontSize: '14px' }}>
@@ -671,6 +772,46 @@ export default function TradeModal({ type, fund, holding, onClose, onConfirm, pe
                     <DatePicker value={date} onChange={setDate} />
                   </div>
                 </div>
+
+                {feeTiers ? (
+                  <div style={{ marginBottom: 12, fontSize: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                      <span className="muted">赎回费率按持有期分档（不满 7 天通常 1.5%）</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowFeeTiers((v) => !v)}
+                        style={{
+                          flexShrink: 0,
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--primary)',
+                          fontSize: '12px',
+                          cursor: 'pointer',
+                          padding: 0
+                        }}
+                      >
+                        {showFeeTiers ? '收起' : '查看阶梯'}
+                      </button>
+                    </div>
+                    {showFeeTiers && feeTiers.sell?.length ? (
+                      <div
+                        style={{
+                          marginTop: 6,
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          padding: '6px 8px'
+                        }}
+                      >
+                        {buildFeeTierRows(feeTiers.sell, 'days').map((r, i) => (
+                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                            <span className="muted">{r.rangeText}</span>
+                            <span style={{ fontVariantNumeric: 'tabular-nums' }}>{r.rateText}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="form-group" style={{ marginBottom: 12 }}>
                   <label className="muted" style={{ display: 'block', marginBottom: 8, fontSize: '14px' }}>

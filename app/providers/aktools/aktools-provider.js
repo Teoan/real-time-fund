@@ -7,6 +7,14 @@
  *   getFundLatestNav(code)          -> { code, date, nav }
  *   getFundNavHistory(code, sdate, edate) -> [{ date, unitNav, accumulatedNav, dailyReturn }]
  *   getFundHoldings(code, year?)    -> { reportDate, dataDate, source, holdings: [...] }
+ *   getFundOverview(code)           -> { fullName, shortName, managementFee, custodianFee, scale, ... }
+ *   getFundFeeTiers(code)           -> { buy: [...], sell: [...], other: {...}, hasTiers }
+ *   getFundDividendDetail(code)     -> { items: [{ year, exDate, perShare, ... }] }
+ *   getFundAchievement(code)        -> { windows: [{ periodLabel, returnPct, rank, total, percentile }] }
+ *   getFundProfitProbability(code)  -> { items: [{ label, months, winRate, avgReturn }] }
+ *   getFundIndustryAllocation(code) -> { items: [{ name, weight, reportDate }] }
+ *   getFundBondHoldings(code)       -> { items: [{ code, name, weight }] }
+ *   getFundPortfolioChange(code, side) -> { indicator, items: [{ code, name, amount }] }
  *
  * 所有方法使用注入的缓存抽象（默认 no-op；业务侧通过 createAktoolsProviderForApp 注入真实缓存）
  * 不实现的接口直接抛 AktoolsUnsupportedError，由调用方决定 fallback。
@@ -22,6 +30,14 @@ import {
 } from './aktools-config.js';
 import { AKTOOLS_CAPABILITIES, isCapabilitySupported, mergeCapabilities } from './aktools-capabilities.js';
 import {
+  mapFundAchievementRows,
+  mapFundBondRows,
+  mapFundChangeRows,
+  mapFundDividendDetailRows,
+  mapFundFeeTiers,
+  mapFundIndustryRows,
+  mapFundOverviewSnapshot,
+  mapFundProfitProbabilityRows,
   mapHoldingRow,
   mapNavHistoryRow,
   mapOverviewRows,
@@ -560,6 +576,246 @@ export function createAktoolsProvider(options = {}) {
     return Object.fromEntries(entries);
   };
 
+  // --------------------------------------------------------------------------
+  // 基金档案（2026-10-30 新增，联调结果见 aktools-capabilities.js）
+  // --------------------------------------------------------------------------
+
+  /**
+   * 基金基本概况（fund_overview_em）。
+   *
+   * 与 getFundDetail（fund_individual_basic_info_xq）的分工：
+   *   - getFundDetail 返回 item/value 对，含「基金评级」「最新规模」，但**不含任何费率**；
+   *   - 本方法返回中文键对象，是管理费/托管费/销售服务费/净资产规模/成立日/业绩基准的唯一来源。
+   * 两者字段互为补充，调用方按需合并，不要互相替代。
+   */
+  const getFundOverview = async (code) => {
+    if (!isCapabilitySupported(capabilities, 'getFundOverview')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundOverview');
+    }
+    const c = String(code || '').trim();
+    if (!c) throw new AktoolsError('基金代码为空');
+    return fetchCached(
+      ['fundOverview', c],
+      async () => {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundOverview, { symbol: c });
+        const snapshot = mapFundOverviewSnapshot(rows);
+        if (!snapshot) throw new FundNotFoundError(`AKTools 未返回基金概况: ${c}`);
+        return { code: c, ...snapshot, source: 'aktools', fetchedAt: Date.now() };
+      },
+      AKTOOLS_CACHE_TTL.getFundOverview
+    );
+  };
+
+  /**
+   * 申购/赎回费率阶梯（fund_individual_detail_info_xq）。
+   *
+   * 为什么不并行调用 fund_fee_em：该接口在本实例上「申购费率」返回 0 行，
+   * 而 detail_info_xq 一次即给出买入阶梯 + 卖出阶梯 + 其他费用，口径也更接近 App 里展示的「分档费率」。
+   */
+  const getFundFeeTiers = async (code) => {
+    if (!isCapabilitySupported(capabilities, 'getFundFeeTiers')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundFeeTiers');
+    }
+    const c = String(code || '').trim();
+    if (!c) throw new AktoolsError('基金代码为空');
+    return fetchCached(
+      ['fundFeeTiers', c],
+      async () => {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundFeeTiers, { symbol: c });
+        // 空数组是合法结果（货币基金/部分 C 类无阶梯），交给调用方判断 hasTiers
+        return mapFundFeeTiers(rows, { code: c });
+      },
+      AKTOOLS_CACHE_TTL.getFundFeeTiers
+    );
+  };
+
+  /**
+   * 分红送配明细（fund_open_fund_info_em，indicator=分红送配详情）。
+   * 无分红基金上游返回空数组，此处归一化为空 items，由 UI 显示「暂无分红记录」。
+   */
+  const getFundDividendDetail = async (code) => {
+    if (!isCapabilitySupported(capabilities, 'getFundDividendDetail')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundDividendDetail');
+    }
+    const c = String(code || '').trim();
+    if (!c) throw new AktoolsError('基金代码为空');
+    return fetchCached(
+      ['fundDividendDetail', c],
+      async () => {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundDividendDetail, {
+          symbol: c,
+          indicator: '分红送配详情'
+        });
+        const items = mapFundDividendDetailRows(rows);
+        return {
+          code: c,
+          items,
+          latest: items[0] || null,
+          source: 'aktools',
+          fetchedAt: Date.now()
+        };
+      },
+      AKTOOLS_CACHE_TTL.getFundDividendDetail
+    );
+  };
+
+  /**
+   * 同业位置（fund_individual_achievement_xq）：区间收益 / 最大回撤 / 同类排名。
+   * 排名文本形如「93/1138」，mapper 已折算 percentile（越小越靠前）。
+   */
+  const getFundAchievement = async (code) => {
+    if (!isCapabilitySupported(capabilities, 'getFundAchievement')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundAchievement');
+    }
+    const c = String(code || '').trim();
+    if (!c) throw new AktoolsError('基金代码为空');
+    return fetchCached(
+      ['fundAchievement', c],
+      async () => {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundAchievement, { symbol: c });
+        const mapped = mapFundAchievementRows(rows);
+        if (mapped.windows.length === 0) throw new FundNotFoundError(`AKTools 未返回业绩数据: ${c}`);
+        return { code: c, ...mapped };
+      },
+      AKTOOLS_CACHE_TTL.getFundAchievement
+    );
+  };
+
+  /**
+   * 持有盈利概率（fund_individual_profit_probability_xq）。
+   * 上游只有 4 行（满 6 个月 / 1 年 / 2 年 / 3 年），属于「持有时长 → 盈利概率」的经验分布。
+   */
+  const getFundProfitProbability = async (code) => {
+    if (!isCapabilitySupported(capabilities, 'getFundProfitProbability')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundProfitProbability');
+    }
+    const c = String(code || '').trim();
+    if (!c) throw new AktoolsError('基金代码为空');
+    return fetchCached(
+      ['fundProfitProbability', c],
+      async () => {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundProfitProbability, { symbol: c });
+        const items = mapFundProfitProbabilityRows(rows);
+        return { code: c, items, source: 'aktools', fetchedAt: Date.now() };
+      },
+      AKTOOLS_CACHE_TTL.getFundProfitProbability
+    );
+  };
+
+  /**
+   * 行业配置（fund_portfolio_industry_allocation_em）。
+   * ⚠️ date 必须显式传空串才取「最新披露期」，省略参数会落到 AKShare 默认年份（静默陈旧）。
+   */
+  const getFundIndustryAllocation = async (code) => {
+    if (!isCapabilitySupported(capabilities, 'getFundIndustryAllocation')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundIndustryAllocation');
+    }
+    const c = String(code || '').trim();
+    if (!c) throw new AktoolsError('基金代码为空');
+    return fetchCached(
+      ['fundIndustryAllocation', c],
+      async () => {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundIndustryAllocation, {
+          symbol: c,
+          date: ''
+        });
+        // 上游一次返回多个报告期，必须只保留最新一期
+        const items = pickLatestDatedItems(mapFundIndustryRows(rows));
+        return {
+          code: c,
+          items,
+          reportDate: items.find((i) => i.reportDate)?.reportDate || null,
+          source: 'aktools',
+          fetchedAt: Date.now()
+        };
+      },
+      AKTOOLS_CACHE_TTL.getFundIndustryAllocation
+    );
+  };
+
+  /**
+   * 债券持仓（fund_portfolio_bond_hold_em）。
+   * 与股票持仓互补：债券型/固收+ 基金的 FundMNInverstPosition 股票列表常为空，
+   * 组合里真正的风险敞口在债券侧。
+   */
+  const getFundBondHoldings = async (code) => {
+    if (!isCapabilitySupported(capabilities, 'getFundBondHoldings')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundBondHoldings');
+    }
+    const c = String(code || '').trim();
+    if (!c) throw new AktoolsError('基金代码为空');
+    return fetchCached(
+      ['fundBondHoldings', c],
+      async () => {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundBondHoldings, {
+          symbol: c,
+          date: ''
+        });
+        const items = pickLatestDatedItems(mapFundBondRows(rows));
+        return {
+          code: c,
+          items,
+          reportDate: items.find((i) => i.reportDate)?.reportDate || null,
+          source: 'aktools',
+          fetchedAt: Date.now()
+        };
+      },
+      AKTOOLS_CACHE_TTL.getFundBondHoldings
+    );
+  };
+
+  /**
+   * 重大变动 / 本季调仓（fund_portfolio_change_em）。
+   * @param {string} code
+   * @param {'buy'|'sell'} [side] - 累计买入 / 累计卖出
+   */
+  const getFundPortfolioChange = async (code, side = 'buy') => {
+    if (!isCapabilitySupported(capabilities, 'getFundPortfolioChange')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundPortfolioChange');
+    }
+    const c = String(code || '').trim();
+    if (!c) throw new AktoolsError('基金代码为空');
+    const indicator = side === 'sell' ? '累计卖出' : '累计买入';
+    return fetchCached(
+      ['fundPortfolioChange', c, indicator],
+      async () => {
+        const rows = await client.call(AKTOOLS_ENDPOINTS.getFundPortfolioChange, {
+          symbol: c,
+          indicator,
+          date: ''
+        });
+        const items = pickLatestDatedItems(mapFundChangeRows(rows, side));
+        return {
+          code: c,
+          indicator,
+          items,
+          reportDate: items.find((i) => i.reportDate)?.reportDate || null,
+          source: 'aktools',
+          fetchedAt: Date.now()
+        };
+      },
+      AKTOOLS_CACHE_TTL.getFundPortfolioChange
+    );
+  };
+
+  /**
+   * 从多为「按期披露」的列表里挑出最新一期。
+   *
+   * fund_portfolio_industry_allocation_em / fund_portfolio_bond_hold_em / fund_portfolio_change_em
+   * 都会把**多个报告期**混在一个响应里（实测行业配置一次返回 3 个季度），
+   * 若不过滤会出现同一行业重复三行、权重互相矛盾。
+   */
+  const pickLatestDatedItems = (items) => {
+    if (!Array.isArray(items) || items.length === 0) return [];
+    let best = '';
+    for (const item of items) {
+      const d = item?.reportDate;
+      if (typeof d === 'string' && d > best) best = d;
+    }
+    if (!best) return items;
+    return items.filter((item) => item.reportDate === best);
+  };
+
   const healthCheck = async () => client.healthCheck();
 
   return {
@@ -571,6 +827,14 @@ export function createAktoolsProvider(options = {}) {
     getFundNavHistory,
     getFundHoldings,
     getFundsLatestNavBatch,
+    getFundOverview,
+    getFundFeeTiers,
+    getFundDividendDetail,
+    getFundAchievement,
+    getFundProfitProbability,
+    getFundIndustryAllocation,
+    getFundBondHoldings,
+    getFundPortfolioChange,
     getStockFundamentals,
     getStockFundamentalsBatch,
     getStockValueHistory,

@@ -597,7 +597,191 @@ export const REPORT_DISCLAIMER =
  * @param {string} [input.generatedAt] 生成时间（调用方注入，便于测试确定性；缺省不显示具体时间）
  * @returns {object} 报告对象（含 markdown 全文）
  */
-export const buildFundResearchReport = ({ code = '', name = '', metrics, generatedAt = null } = {}) => {
+// ── 外部档案补充段（AKShare 单基金接口，全部可选） ──────────────────────
+//
+// 这些字段来自基金公司 / 雪球的披露口径（经 AKTools 转发），与「净值序列测算」的指标
+// 不是同一数据来源，因此单独成段、**不参与 computeProfileScore 打分**，只做事实陈列。
+// 任一接口拿不到数据时对应段落返回 null，报告结构对旧调用方向后兼容。
+
+const EXTERNAL_SECTION_NOTE = '本节为披露口径（季度/年度更新），与净值序列测算口径不同，不参与指标画像评分。';
+
+/** 构造一个「只展示不判读」的补充指标 */
+const externalItem = (key, label, valueText) => ({
+  key,
+  label,
+  valueText: isString(valueText) && valueText ? valueText : null,
+  grade: { level: REPORT_LEVELS.UNKNOWN, text: null }
+});
+
+const externalSection = (key, title, items, notes = []) => {
+  const list = (isArray(items) ? items : []).filter(isObject);
+  if (list.length === 0) return null;
+  if (list.every((item) => item.valueText == null)) return null;
+  return {
+    key,
+    title,
+    level: REPORT_LEVELS.UNKNOWN,
+    verdict: '事实陈列（披露口径）',
+    verdictFrom: null,
+    items: list,
+    notes: [EXTERNAL_SECTION_NOTE, ...notes.filter((n) => isString(n) && n)],
+    unavailable: false,
+    partial: false,
+    external: true
+  };
+};
+
+/** 金额 + 单位（如 101.09 亿元） */
+const amountText = (part) => {
+  if (!isObject(part) || !isFiniteNumber(part.value)) return null;
+  return `${part.value}${isString(part.unit) ? part.unit : ''}`;
+};
+
+/** 百分数文本 */
+const rateText = (v) => (isFiniteNumber(v) ? `${v.toFixed(2)}%` : null);
+
+/**
+ * 「基金档案」段：规模、费率、业绩基准等静态披露信息。
+ * @param {object|null} profile fetchFundProfileOverview 的返回值
+ */
+export const buildProfileSection = (profile) => {
+  if (!isObject(profile)) return null;
+  const items = [
+    externalItem('fundType', '基金类型', profile.type),
+    externalItem('establishDate', '成立日期', profile.establishDate),
+    externalItem('company', '管理人', profile.company),
+    externalItem('manager', '基金经理', profile.manager),
+    externalItem('scale', '最新规模', amountText(profile.scale)),
+    externalItem('shares', '最新份额', amountText(profile.shares)),
+    externalItem('managementFee', '管理费', rateText(profile.managementFee)),
+    externalItem('custodianFee', '托管费', rateText(profile.custodianFee)),
+    externalItem('salesServiceFee', '销售服务费', rateText(profile.salesServiceFee)),
+    externalItem('benchmark', '业绩基准', profile.benchmark),
+    externalItem('dividendSinceStart', '成立来分红', profile.dividendSinceStart)
+  ];
+  return externalSection('profile', '基金档案（公司披露）', items, [
+    profile.scale?.asOf ? `规模口径截止 ${profile.scale.asOf}。` : null,
+    '管理费/托管费/销售服务费从基金资产中按日计提，直接体现在净值里，不是交易时另收的费用。'
+  ]);
+};
+
+/**
+ * 「申赎费率阶梯」段。
+ * @param {object|null} feeTiers fetchFundFeeTiers 的返回值
+ */
+export const buildFeeSection = (feeTiers) => {
+  if (!isObject(feeTiers) || feeTiers.hasTiers !== true) return null;
+  const buy = isArray(feeTiers.buy) ? feeTiers.buy : [];
+  const sell = isArray(feeTiers.sell) ? feeTiers.sell : [];
+
+  const rangeOf = (tier, unit) => {
+    const suffix = unit === 'days' ? '天' : '元';
+    const { min, max } = tier;
+    if (isFiniteNumber(min) && isFiniteNumber(max)) return `${min}${suffix}–${max}${suffix}`;
+    if (isFiniteNumber(min)) return `≥${min}${suffix}`;
+    if (isFiniteNumber(max)) return `≤${max}${suffix}`;
+    return '—';
+  };
+  const tierText = (tier, unit) =>
+    isFiniteNumber(tier?.fixedFee) ? `${tier.fixedFee} 元/笔` : isFiniteNumber(tier?.rate) ? `${tier.rate}%` : '—';
+
+  const items = [
+    externalItem('buyTiers', '申购费档位', buy.length > 0 ? `${buy.length} 档` : null),
+    externalItem('sellTiers', '赎回费档位', sell.length > 0 ? `${sell.length} 档` : null),
+    externalItem('buyFirst', '最低档申购费', buy.length > 0 ? tierText(buy[0], 'amount') : null),
+    externalItem('sellFirst', '最短档赎回费', sell.length > 0 ? tierText(sell[0], 'days') : null)
+  ];
+
+  const notes = [];
+  if (buy.length > 0) {
+    notes.push(
+      `申购费率：${buy
+        .slice(0, 4)
+        .map((t) => `${rangeOf(t, 'amount')} ${tierText(t, 'amount')}`)
+        .join('；')}`
+    );
+  }
+  if (sell.length > 0) {
+    notes.push(
+      `赎回费率：${sell
+        .slice(0, 4)
+        .map((t) => `${rangeOf(t, 'days')} ${tierText(t, 'days')}`)
+        .join('；')}`
+    );
+  }
+  return externalSection('feeTiers', '申赎费率阶梯', items, notes);
+};
+
+/**
+ * 「同业位置」段：区间收益/回撤/同类排名 + 历史持有盈利概率。
+ * @param {object|null} achievement fetchFundAchievement 的返回值
+ * @param {object|null} probability fetchFundProfitProbability 的返回值
+ */
+export const buildPeerSection = (achievement, probability) => {
+  const windows = isObject(achievement) && isArray(achievement.windows) ? achievement.windows : [];
+  const probs = isObject(probability) && isArray(probability.items) ? probability.items : [];
+  if (windows.length === 0 && probs.length === 0) return null;
+
+  // 上游按「近一年/近三年/近五年」顺序返回，第一项即最近区间，作为概览口径
+  const primary = windows[0] || null;
+
+  const items = [
+    externalItem('windowCount', '披露区间数', windows.length > 0 ? `${windows.length} 个` : null),
+    externalItem('latestReturn', '区间收益', primary ? rateText(primary.returnPct) : null),
+    externalItem('latestDrawdown', '区间最大回撤', primary ? rateText(primary.maxDrawdown) : null),
+    externalItem(
+      'latestRank',
+      '同类排名',
+      primary && isFiniteNumber(primary.rank) && isFiniteNumber(primary.total)
+        ? `${primary.rank}/${primary.total}`
+        : null
+    ),
+    externalItem('winRate', '持有盈利概率', probs.length > 0 ? rateText(probs[0]?.winRate) : null)
+  ];
+
+  const notes = [];
+  if (windows.length > 0) {
+    notes.push(
+      `同类排名：${windows
+        .slice(0, 3)
+        .map(
+          (w) =>
+            `${w.periodLabel} ${rateText(w.returnPct)}` +
+            (isFiniteNumber(w.rank) && isFiniteNumber(w.total) ? `（${w.rank}/${w.total}）` : '')
+        )
+        .join('；')}。`
+    );
+  }
+  if (probs.length > 0) {
+    notes.push(
+      `盈利概率样本：${probs
+        .slice(0, 3)
+        .map((p) => `${p.label} ${rateText(p.winRate)}`)
+        .join('；')}。`
+    );
+  }
+  notes.push('排名与概率为历史统计，不构成未来收益预测。');
+  return externalSection('peerRank', '同业位置与持有概率', items, notes);
+};
+
+/**
+ * @param {object} input
+ * @param {object} input.metrics computeFundMetrics 的返回值
+ * @param {object} [input.profile] 基金档案（可选）
+ * @param {object} [input.feeTiers] 申赎费率阶梯（可选）
+ * @param {object} [input.achievement] 同业业绩（可选）
+ * @param {object} [input.probability] 持有盈利概率（可选）
+ */
+export const buildFundResearchReport = ({
+  code = '',
+  name = '',
+  metrics,
+  generatedAt = null,
+  profile = null,
+  feeTiers = null,
+  achievement = null,
+  probability = null
+} = {}) => {
   const m = isObject(metrics) ? metrics : {};
   const items = buildReportItems(m);
   const itemByKey = new Map(items.map((item) => [item.key, item]));
@@ -646,6 +830,13 @@ export const buildFundResearchReport = ({ code = '', name = '', metrics, generat
     };
   });
 
+  // 外部档案段（可选）追加在原有章节之后：不参与评分、不改变原有章节的判读
+  const externalSections = [
+    buildProfileSection(profile),
+    buildFeeSection(feeTiers),
+    buildPeerSection(achievement, probability)
+  ].filter(Boolean);
+
   const headline = insufficient
     ? '净值样本不足，暂无法生成判读结论'
     : [
@@ -669,7 +860,8 @@ export const buildFundResearchReport = ({ code = '', name = '', metrics, generat
     rating,
     headline,
     items,
-    sections,
+    sections: externalSections.length > 0 ? [...sections, ...externalSections] : sections,
+    externalSections,
     highlights,
     concerns,
     limitations,

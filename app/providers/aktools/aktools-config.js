@@ -50,6 +50,28 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
  *           stock_us_profile / stock_us_fundamental / stock_us_indicator_lg
  *     ⇒ 结论：美股只有「当前估值倍数（东财 push2，105./106. secid）」+「AKTools 财务指标」，
  *       不存在可用的美股估值历史序列，故美股 PE/PB/PS 历史分位无法计算（详见 README）。
+ * - 真实联调结果（2026-10-30，基金档案/费率/分红/同业/行业/债券/调仓，样本 110022；
+ *   脚本见 scripts/aktools-probe.mjs，记录见 doc/akshare-基金接口联调记录.md）：
+ *     可用（均 <4KB，~0.2~0.5s）：
+ *       fund_overview_em 200 ~838B — 管理费率/托管费率/销售服务费率/净资产规模/业绩比较基准/跟踪标的
+ *         ⚠️ 返回是「单行中文键对象」[{基金全称…}]，不是 item/value 对，与 fund_individual_basic_info_xq 不同
+ *       fund_individual_detail_info_xq 200 ~913B — 买入规则/卖出规则/其他费用三组，含金额与持有天数阶梯
+ *         ⚠️ 条件文本混用「万/元/天/年」，顶级档位的「费用」是固定金额（如 1000.0 = 1000 元/笔），不是百分数
+ *       fund_open_fund_info_em(indicator='分红送配详情') 200 ~0.5~2KB — 权益登记日/除息日/分红发放日/每10份分红
+ *         ⚠️ 无分红的基金返回 []（如 110022），有分红的样本 000001/519066/161725 均正常
+ *       fund_individual_achievement_xq 200 ~3.5KB — 本产品区间收益/最大回撤/周期收益同类排名（"93/1138"）
+ *       fund_individual_profit_probability_xq 200 ~267B — 满6个月/1年/3年/5年的盈利概率与平均收益
+ *       fund_portfolio_industry_allocation_em 200 ~2.2KB — 行业类别/占净值比例/截止时间
+ *       fund_portfolio_bond_hold_em 200 ~1.7KB — 债券代码/债券名称/占净值比例/季度
+ *       fund_portfolio_change_em 200 ~3.8KB — 本期累计买入金额/占期初基金资产净值比例（indicator=累计买入/累计卖出）
+ *     不可用（禁止接入）：
+ *       fund_announcement_dividend_em / fund_announcement_report_em / fund_announcement_personnel_em → 500
+ *       fund_cf_em（拆分）→ 500
+ *       fund_fee_em（申购费率）→ 200 但返回 []（空表，无数据；赎回费率仅 4 行且无金额阶梯）
+ *       fund_etf_spot_em → 15s 超时（仍不可用）
+ *     全市场表（返回 MB 级，禁止进客户端请求路径）：
+ *       fund_info_index_em 200 ~682KB（1791 行）、fund_open_fund_info_em(indicator='同类排名走势') ~418KB
+ *         ⇒ 同类位置改用 fund_individual_achievement_xq（单基金 3.5KB），不要拉排名走势
  */
 export const AKTOOLS_DEFAULT_BASE_URL = 'http://100.68.218.28:18081/api/public';
 
@@ -96,8 +118,28 @@ export const AKTOOLS_ENDPOINTS = Object.freeze({
   getFundLatestNav: 'fund_open_fund_daily_em',
   getFundNavHistory: 'fund_open_fund_info_em',
   getFundHoldings: 'fund_portfolio_hold_em',
+  // 基金档案-基本概况（东财）：管理费率/托管费率/销售服务费率/净资产规模/业绩比较基准/跟踪标的
+  // ⚠️ 返回单行中文键对象，与 fund_individual_basic_info_xq 的 item/value 对结构不同
   getFundOverview: 'fund_overview_em',
+  // 基金档案-交易规则（雪球）：买入规则/卖出规则/其他费用，含金额与持有天数阶梯
+  // 替代 fund_fee_em（实测返回空表）：费率阶梯的唯一可用来源
+  getFundFeeTiers: 'fund_individual_detail_info_xq',
+  // 基金分红明细（东财，复用净值历史端点 + indicator='分红送配详情'）
+  // ⚠️ 与 getFundNavHistory 同 URL 不同 indicator，缓存键必须带 indicator 区分
+  getFundDividendDetail: 'fund_open_fund_info_em',
+  // 基金业绩详情（雪球）：区间收益/最大回撤/同类排名（单基金 ~3.5KB）
+  getFundAchievement: 'fund_individual_achievement_xq',
+  // 持有盈利概率（雪球）：满 6 月/1 年/3 年/5 年的历史盈利概率（静态历史统计，非预测）
+  getFundProfitProbability: 'fund_individual_profit_probability_xq',
+  // 基金档案-行业配置（东财）：基金自身披露的行业占净值比例
+  getFundIndustryAllocation: 'fund_portfolio_industry_allocation_em',
+  // 基金档案-债券持仓（东财）
+  getFundBondHoldings: 'fund_portfolio_bond_hold_em',
+  // 基金档案-重大变动（东财）：indicator='累计买入' / '累计卖出'
+  getFundPortfolioChange: 'fund_portfolio_change_em',
   getFundManager: 'fund_manager_em',
+  // ⚠️ fund_fh_em 在 AKTools 实例上返回 500（2026-08-31 与 2026-10-30 两次实测），保持关闭；
+  //    分红数据改用 getFundDividendDetail（分红送配详情）
   getFundDividend: 'fund_fh_em',
   getFundRank: 'fund_open_fund_rank_em',
   getEtfSpot: 'fund_etf_spot_em',
@@ -155,6 +197,15 @@ export const AKTOOLS_CACHE_TTL = Object.freeze({
   getFundNavHistory: ONE_DAY_MS,
   getFundHoldings: ONE_DAY_MS,
   getFundOverview: ONE_DAY_MS,
+  getFundFeeTiers: ONE_DAY_MS,
+  getFundDividendDetail: ONE_DAY_MS,
+  // 同类排名按季报/日更均有可能变动，取 6h：既不必每次开弹框重拉，也不会长期错位
+  getFundAchievement: 6 * 60 * 60 * 1000,
+  getFundProfitProbability: ONE_DAY_MS,
+  // 行业/债券持仓与季报同源，按天缓存即可
+  getFundIndustryAllocation: ONE_DAY_MS,
+  getFundBondHoldings: ONE_DAY_MS,
+  getFundPortfolioChange: ONE_DAY_MS,
   getFundManager: ONE_DAY_MS,
   getFundDividend: ONE_DAY_MS,
   getFundRank: 60 * 60 * 1000,

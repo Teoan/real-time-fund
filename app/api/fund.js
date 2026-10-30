@@ -4275,3 +4275,136 @@ export const fetchFundValuationHistory = async (fundCode, range = DEFAULT_VALUAT
     return null;
   }
 };
+
+// ============================================================================
+// 基金档案（AKShare 单基金接口）—— 2026-10-30 新增
+//
+// 设计约定（与既有 fetchStockFundamentalsBatched 等保持一致）：
+//   - 能力开关关闭时**返回 null 而不抛错**：UI 用 null 判定「该模块不展示」，
+//     不需要 try/catch，也不会把「服务端未开启」误报成「数据加载失败」。
+//   - 失败一律吞掉返回 null：档案是只读增强信息，任何一模块挂了都不能影响估值主流程。
+//   - 这一层**不做 TanStack 缓存**（见下方 fetchFundProfile 注释里的死锁说明）。
+// ============================================================================
+
+/**
+ * 统一执行「能力开关 + 失败静默」的档案类请求。
+ *
+ * ⚠️ 本层不再调用 getQueryClient().fetchQuery()（2026-10-30 修）：
+ * 档案类 fetcher 的调用方本身就是
+ * `useQuery({ queryKey: qk.aktoolsXxx(code), queryFn: () => fetchXxx(code) })`
+ * （FundProfileModal / TradeModal）。若本层再用**同一个** queryKey 去 fetchQuery，
+ * 会命中 TanStack 的「同 key 自等待」死锁：Query.fetch() 在 fetchStatus !== 'idle'
+ * 时直接 `return this.#retryer.promise`，于是外层 queryFn 等的是自己 → 永不 resolve，
+ * 弹框永远停在「加载中…」。
+ *
+ * 缓存分两层，与本层无关：
+ *   1. AKTools Provider 内存缓存（aktools-provider.js 的 fetchCached，key = ['aktools', ...]，
+ *      TTL = AKTOOLS_CACHE_TTL.xxx，与原先进制这里的 staleTime 一一对应：概况/费率/分红/
+ *      盈利概率/行业/债券/调仓 一天，同业排名 6 小时）；
+ *   2. 调用方 TanStack Query（key 见 app/lib/query-keys.js）。切换服务地址时，
+ *      外层由 removeQueries(['aktools']) 清、provider 层由 defaultAktoolsProvider.clearCache() 清。
+ *
+ * @param {string} capabilityName - aktools-capabilities.js 里的能力名
+ * @param {Function} queryFn - 实际取数函数（带 provider 缓存的 AKTOOLS_PROVIDER.xxx 调用）
+ * @returns {Promise<any|null>}
+ */
+const fetchFundProfile = async (capabilityName, queryFn) => {
+  if (!AKTOOLS_PROVIDER?.capabilities?.[capabilityName]) return null;
+  try {
+    return await queryFn();
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * 基金基本概况：管理费/托管费/销售服务费、净资产规模、份额规模、成立日、业绩比较基准、跟踪标的。
+ * 与 fetchFundDetail（若存在）的区别：这里只取 fund_overview_em 独有的费率/规模字段。
+ * @param {string} fundCode
+ * @returns {Promise<object|null>}
+ */
+export const fetchFundProfileOverview = async (fundCode) => {
+  const c = String(fundCode || '').trim();
+  if (!c) return null;
+  return fetchFundProfile('getFundOverview', () => AKTOOLS_PROVIDER.getFundOverview(c));
+};
+
+/**
+ * 申购/赎回费率阶梯（含管理费/托管费/销售服务费）。
+ * @param {string} fundCode
+ * @returns {Promise<{buy: Array, sell: Array, other: object, hasTiers: boolean}|null>}
+ */
+export const fetchFundFeeTiers = async (fundCode) => {
+  const c = String(fundCode || '').trim();
+  if (!c) return null;
+  return fetchFundProfile('getFundFeeTiers', () => AKTOOLS_PROVIDER.getFundFeeTiers(c));
+};
+
+/**
+ * 分红送配明细（最新在前）。无分红基金返回 { items: [] }。
+ * @param {string} fundCode
+ * @returns {Promise<{items: Array, latest: object|null}|null>}
+ */
+export const fetchFundDividendDetail = async (fundCode) => {
+  const c = String(fundCode || '').trim();
+  if (!c) return null;
+  return fetchFundProfile('getFundDividendDetail', () => AKTOOLS_PROVIDER.getFundDividendDetail(c));
+};
+
+/**
+ * 同业位置：区间收益 / 最大回撤 / 同类排名（含 percentile）。
+ * @param {string} fundCode
+ * @returns {Promise<{windows: Array, periods: Array}|null>}
+ */
+export const fetchFundAchievement = async (fundCode) => {
+  const c = String(fundCode || '').trim();
+  if (!c) return null;
+  return fetchFundProfile('getFundAchievement', () => AKTOOLS_PROVIDER.getFundAchievement(c));
+};
+
+/**
+ * 持有盈利概率（满 6 个月 / 1 年 / 2 年 / 3 年的历史胜率与平均收益）。
+ * @param {string} fundCode
+ * @returns {Promise<{items: Array}|null>}
+ */
+export const fetchFundProfitProbability = async (fundCode) => {
+  const c = String(fundCode || '').trim();
+  if (!c) return null;
+  return fetchFundProfile('getFundProfitProbability', () => AKTOOLS_PROVIDER.getFundProfitProbability(c));
+};
+
+/**
+ * 基金自身披露的行业配置（最新报告期）。
+ * 与持仓穿透的「行业分布」不同：这里是基金季报口径，不需要逐只个股估值。
+ * @param {string} fundCode
+ * @returns {Promise<{items: Array, reportDate: string|null}|null>}
+ */
+export const fetchFundIndustryAllocation = async (fundCode) => {
+  const c = String(fundCode || '').trim();
+  if (!c) return null;
+  return fetchFundProfile('getFundIndustryAllocation', () => AKTOOLS_PROVIDER.getFundIndustryAllocation(c));
+};
+
+/**
+ * 债券持仓（最新报告期）。债券型/固收+ 基金在股票持仓为空时仍有实际风险敞口。
+ * @param {string} fundCode
+ * @returns {Promise<{items: Array, reportDate: string|null}|null>}
+ */
+export const fetchFundBondHoldings = async (fundCode) => {
+  const c = String(fundCode || '').trim();
+  if (!c) return null;
+  return fetchFundProfile('getFundBondHoldings', () => AKTOOLS_PROVIDER.getFundBondHoldings(c));
+};
+
+/**
+ * 本季调仓：累计买入 / 累计卖出明细（最新报告期）。
+ * @param {string} fundCode
+ * @param {'buy'|'sell'} [side]
+ * @returns {Promise<{indicator: string, items: Array, reportDate: string|null}|null>}
+ */
+export const fetchFundPortfolioChange = async (fundCode, side = 'buy') => {
+  const c = String(fundCode || '').trim();
+  if (!c) return null;
+  const indicator = side === 'sell' ? '累计卖出' : '累计买入';
+  return fetchFundProfile('getFundPortfolioChange', () => AKTOOLS_PROVIDER.getFundPortfolioChange(c, side));
+};

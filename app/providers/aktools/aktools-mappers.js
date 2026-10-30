@@ -355,3 +355,513 @@ export const mapStockHkValueHistory = (rows, valueKey) => {
 };
 
 export const __test__ = { toFiniteNumber, toIsoDate, pickString, extractReportDate, parseAkShareTimestamp };
+
+// ============================================================================
+// 基金档案 / 费率 / 分红 / 同业 / 行业 / 债券 / 调仓
+// （AKShare 列名 ↔ 领域字段的唯一映射点；缺列一律返回 null，绝不 0 顶替）
+// ============================================================================
+
+/**
+ * 中文日期 → YYYY-MM-DD。
+ * 兼容「2010年08月20日」「2010年08月20日 / 63.727亿份」「2010-08-20」。
+ */
+const parseChineseDate = (raw) => {
+  const s = pickString(raw);
+  if (!s) return null;
+  const m = s.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+  if (m) return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+  return toIsoDate(s);
+};
+
+/**
+ * 解析「103.09亿元（截止至：2026年09月30日）」这类带单位与截止日的规模文本。
+ * @returns {{ value: number|null, unit: string|null, asOf: string|null }|null}
+ */
+const parseScaledAmount = (raw) => {
+  const s = pickString(raw);
+  if (!s) return null;
+  const num = s.match(/([\d.]+)\s*(亿元|亿份|万元|万份|元)/);
+  if (!num) return null;
+  const value = toFiniteNumber(num[1]);
+  if (value == null) return null;
+  const asOfMatch = s.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+  return {
+    value,
+    unit: num[2],
+    asOf: asOfMatch
+      ? `${asOfMatch[1]}-${String(asOfMatch[2]).padStart(2, '0')}-${String(asOfMatch[3]).padStart(2, '0')}`
+      : null
+  };
+};
+
+/**
+ * 解析「1.20%（每年）」「0.20%（每年）」「---（每年）」→ 百分数数字或 null。
+ */
+const parseFeePercent = (raw) => {
+  const s = pickString(raw);
+  if (!s) return null;
+  const m = s.match(/([\d.]+)\s*%/);
+  return m ? toFiniteNumber(m[1]) : null;
+};
+
+/**
+ * fund_overview_em 整段 → 基金档案基本概况。
+ *
+ * ⚠️ 上游返回是**单行中文键对象**（不是 fund_individual_basic_info_xq 的 item/value 对），
+ * 所以不能复用 mapOverviewRows。
+ *
+ * 字段映射（领域字段 ← 列名）：
+ *   fullName           ← 基金全称
+ *   shortName          ← 基金简称
+ *   type               ← 基金类型
+ *   issueDate          ← 发行日期            （"2010年07月26日" → 2010-07-26）
+ *   establishDate      ← 成立日期/规模        （只取斜杠前的日期部分）
+ *   establishScale     ← 成立日期/规模        （斜杠后的份额，如 63.727亿份）
+ *   scale              ← 净资产规模          （{ value, unit, asOf }）
+ *   shares             ← 份额规模            （{ value, unit, asOf }）
+ *   company            ← 基金管理人
+ *   custodian          ← 基金托管人
+ *   manager            ← 基金经理人
+ *   dividendSinceStart ← 成立来分红          （保留原文，如「每份累计0.00元（0次）」）
+ *   managementFee      ← 管理费率            （百分数，1.20% → 1.2）
+ *   custodianFee       ← 托管费率
+ *   salesServiceFee    ← 销售服务费率        （「---（每年）」→ null）
+ *   maxSubscriptionFee ← 最高认购费率        （百分数）
+ *   benchmark          ← 业绩比较基准
+ *   trackingIndex      ← 跟踪标的            （「该基金无跟踪标的」→ null）
+ *
+ * @param {Array<object>} rows
+ * @returns {object|null} 无有效字段时返回 null
+ */
+export const mapFundOverviewSnapshot = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const row = rows.find((r) => r && typeof r === 'object');
+  if (!row) return null;
+
+  const establishRaw = pickString(row['成立日期/规模']);
+  const establishDate = parseChineseDate(establishRaw);
+  const establishScaleRaw = establishRaw && establishRaw.includes('/') ? establishRaw.split('/')[1] : null;
+  const trackingRaw = pickString(row['跟踪标的']);
+
+  const result = {
+    fullName: pickString(row['基金全称']),
+    shortName: pickString(row['基金简称']),
+    type: pickString(row['基金类型']),
+    issueDate: parseChineseDate(row['发行日期']),
+    establishDate,
+    establishScale: parseScaledAmount(establishScaleRaw),
+    scale: parseScaledAmount(row['净资产规模']),
+    shares: parseScaledAmount(row['份额规模']),
+    company: pickString(row['基金管理人']),
+    custodian: pickString(row['基金托管人']),
+    manager: pickString(row['基金经理人']),
+    dividendSinceStart: pickString(row['成立来分红']),
+    managementFee: parseFeePercent(row['管理费率']),
+    custodianFee: parseFeePercent(row['托管费率']),
+    salesServiceFee: parseFeePercent(row['销售服务费率']),
+    maxSubscriptionFee: parseFeePercent(row['最高认购费率']),
+    benchmark: pickString(row['业绩比较基准']),
+    trackingIndex: trackingRaw && !trackingRaw.includes('无跟踪标的') ? trackingRaw : null
+  };
+
+  const hasAny = Object.values(result).some((v) => v != null);
+  return hasAny ? result : null;
+};
+
+const UNIT_TO_BASE = { 万: 10000, 元: 1, 天: 1, 年: 365 };
+
+/**
+ * 解析费率阶梯的条件文本。
+ *
+ * 实测形态（fund_individual_detail_info_xq）：
+ *   买入规则：'0.0万<买入金额<100.0万' / '100.0万<=买入金额<500.0万' / '1000.0万<=买入金额'
+ *   卖出规则：'0.0天<持有期限<7.0天' / '365.0天<=持有期限<2.0年' / '2.0年<=持有期限'
+ *
+ * 归一化口径：金额 → 元；期限 → 天（1 年 = 365 天）。
+ * 比较符语义：`<` 为开区间（不含边界），`<=` 为闭区间（含边界）。
+ *
+ * @param {string} raw
+ * @returns {{ min: number|null, minInclusive: boolean, max: number|null, maxInclusive: boolean,
+ *             kind: 'amount'|'days' }|null}
+ */
+export const parseFeeTierCondition = (raw) => {
+  const s = pickString(raw);
+  if (!s) return null;
+  const m = s.match(
+    /^(?:([\d.]+)\s*(万|元|天|年))?\s*(<=|<)\s*(买入金额|持有期限)\s*(?:(<=|<)\s*([\d.]+)\s*(万|元|天|年))?$/
+  );
+  if (!m) return null;
+  const [, lNum, lUnit, lCmp, field, rCmp, rNum, rUnit] = m;
+  const kind = field === '持有期限' ? 'days' : 'amount';
+  const toBase = (value, unit) => {
+    const n = toFiniteNumber(value);
+    if (n == null) return null;
+    const factor = UNIT_TO_BASE[unit];
+    return factor == null ? null : n * factor;
+  };
+  return {
+    min: lNum != null ? toBase(lNum, lUnit) : null,
+    // '0.0万<买入金额' → 金额 > 0（不含下界）；'100.0万<=买入金额' → 金额 >= 100万（含下界）
+    minInclusive: lCmp === '<=',
+    max: rNum != null ? toBase(rNum, rUnit) : null,
+    maxInclusive: rCmp === '<=',
+    kind
+  };
+};
+
+/**
+ * 费用值语义判定。
+ *
+ * 上游「费用」列在百分之九十九的行里是百分数（1.5 = 1.5%），
+ * 但**顶级档位**会用固定金额表达（如「1000.0万<=买入金额」→ 1000.0 意为每笔 1000 元）。
+ * 申购/赎回费率不存在 ≥100% 的情形，故以 100 为界区分（阈值刻意取得比任何真实费率都高）。
+ */
+const toFeeParts = (raw) => {
+  const n = toFiniteNumber(raw);
+  if (n == null) return { rate: null, fixedFee: null };
+  if (n >= 100) return { rate: null, fixedFee: n };
+  return { rate: n, fixedFee: null };
+};
+
+/**
+ * fund_individual_detail_info_xq 整段 → 费率阶梯。
+ *
+ * @param {Array<object>} rows
+ * @returns {{ buy: Array<object>, sell: Array<object>,
+ *             other: { managementFee: number|null, custodianFee: number|null, salesServiceFee: number|null },
+ *             hasTiers: boolean }}
+ */
+export const mapFundFeeTiers = (rows, meta = {}) => {
+  const empty = {
+    buy: [],
+    sell: [],
+    other: { managementFee: null, custodianFee: null, salesServiceFee: null },
+    hasTiers: false,
+    source: 'aktools',
+    fetchedAt: Date.now()
+  };
+  if (!Array.isArray(rows) || rows.length === 0) return empty;
+
+  const buy = [];
+  const sell = [];
+  let managementFee = null;
+  let custodianFee = null;
+  let salesServiceFee = null;
+
+  const OTHER_FEE_NAME_MAP = {
+    基金管理费: 'management',
+    基金托管费: 'custodian',
+    销售服务费: 'salesService'
+  };
+
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const type = pickString(row['费用类型']);
+    const condition = pickString(row['条件或名称']);
+    if (!type || !condition) continue;
+
+    if (type === '其他费用') {
+      const key = OTHER_FEE_NAME_MAP[condition];
+      const fee = toFeeParts(row['费用']);
+      const rate = fee.rate;
+      if (key === 'management') managementFee = rate;
+      else if (key === 'custodian') custodianFee = rate;
+      else if (key === 'salesService') salesServiceFee = rate;
+      continue;
+    }
+
+    if (type !== '买入规则' && type !== '卖出规则') continue;
+    const parsed = parseFeeTierCondition(condition);
+    if (!parsed) continue;
+    const fee = toFeeParts(row['费用']);
+    const tier = {
+      min: parsed.min,
+      minInclusive: parsed.minInclusive,
+      max: parsed.max,
+      maxInclusive: parsed.maxInclusive,
+      unit: parsed.kind,
+      rate: fee.rate,
+      fixedFee: fee.fixedFee,
+      label: condition
+    };
+    if (type === '买入规则') buy.push(tier);
+    else sell.push(tier);
+  }
+
+  const byMin = (a, b) => (a.min == null ? -1 : a.min) - (b.min == null ? -1 : b.min);
+  buy.sort(byMin);
+  sell.sort(byMin);
+
+  return {
+    buy,
+    sell,
+    other: { managementFee, custodianFee, salesServiceFee },
+    hasTiers: buy.length > 0 || sell.length > 0,
+    source: 'aktools',
+    code: pickString(meta.code) || null,
+    fetchedAt: Date.now()
+  };
+};
+
+/**
+ * fund_open_fund_info_em(indicator='分红送配详情') 整段 → 分红明细。
+ *
+ * 上游列：年份 / 权益登记日 / 除息日 / 每10份分红 / 分红发放日
+ * 「每10份分红」是文本，如「每10份派现金0.1000元」——统一折算为**每份**金额（0.01）。
+ * 无分红的基金返回 []，此时整段为空数组（不是 null），由 UI 显示「无分红记录」。
+ *
+ * @param {Array<object>} rows
+ * @returns {Array<{ year: string|null, recordDate: string|null, exDate: string|null,
+ *                   payDate: string|null, perShare: number|null, raw: string|null }>}
+ */
+export const mapFundDividendDetailRows = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  return rows
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null;
+      const raw = pickString(row['每10份分红']);
+      const exDate = parseChineseDate(row['除息日']);
+      const recordDate = parseChineseDate(row['权益登记日']);
+      const payDate = parseChineseDate(row['分红发放日']);
+      let perShare = null;
+      if (raw) {
+        const m = raw.match(/派现金\s*([\d.]+)\s*元/);
+        const per10 = m ? toFiniteNumber(m[1]) : null;
+        // 上游文本就是「每10份」，折算到每份需要除以 10
+        if (per10 != null) perShare = Number((per10 / 10).toFixed(6));
+      }
+      if (!exDate && !recordDate && perShare == null) return null;
+      return {
+        year: pickString(row['年份']),
+        recordDate,
+        exDate,
+        payDate,
+        perShare,
+        raw
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const da = a.exDate || a.recordDate || '';
+      const db = b.exDate || b.recordDate || '';
+      // 最新在前
+      return da < db ? 1 : da > db ? -1 : 0;
+    });
+};
+
+/**
+ * 解析「93/1138」这类同类排名文本。
+ * @returns {{ rank: number|null, total: number|null, percentile: number|null }}
+ */
+const parseRankText = (raw) => {
+  const s = pickString(raw);
+  if (!s) return { rank: null, total: null, percentile: null };
+  const m = s.match(/^(\d+)\s*\/\s*(\d+)$/);
+  if (!m) return { rank: null, total: null, percentile: null };
+  const rank = toFiniteNumber(m[1]);
+  const total = toFiniteNumber(m[2]);
+  const percentile = rank != null && total != null && total > 0 ? Number(((rank / total) * 100).toFixed(2)) : null;
+  return { rank, total, percentile };
+};
+
+/**
+ * fund_individual_achievement_xq 整段 → 同业位置（区间收益 / 最大回撤 / 同类排名）。
+ *
+ * 上游列：业绩类型 / 周期 / 本产品区间收益 / 本产品最大回撒（上游错别字，照抄） / 周期收益同类排名
+ * 归一化：percentile = rank / total × 100（越小越靠前）；仅取「年度业绩」行，其余类型保留在 rows 里备用。
+ *
+ * @param {Array<object>} rows
+ * @returns {{ windows: Array<object>, periods: Array<string>, fetchedAt: number }}
+ */
+export const mapFundAchievementRows = (rows) => {
+  const out = { windows: [], periods: [], source: 'aktools', fetchedAt: Date.now() };
+  if (!Array.isArray(rows) || rows.length === 0) return out;
+
+  const byPeriod = new Map();
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const period = pickString(row['周期']);
+    if (!period) continue;
+    const rank = parseRankText(row['周期收益同类排名']);
+    const item = {
+      periodLabel: period,
+      category: pickString(row['业绩类型']) || null,
+      returnPct: toFiniteNumber(row['本产品区间收益']),
+      maxDrawdown: toFiniteNumber(row['本产品最大回撒']),
+      rank: rank.rank,
+      total: rank.total,
+      percentile: rank.percentile
+    };
+    // 同一周期可能有多条（不同业绩类型），保留信息量最大的那条（有排名 > 仅有收益）
+    const prev = byPeriod.get(period);
+    if (!prev || (prev.rank == null && item.rank != null)) byPeriod.set(period, item);
+  }
+  out.windows = Array.from(byPeriod.values());
+  out.periods = out.windows.map((w) => w.periodLabel);
+  return out;
+};
+
+/**
+ * fund_individual_profit_probability_xq 整段 → 持有盈利概率。
+ *
+ * 上游列：持有时长（'满6个月' / '满1年'） / 盈利概率（%） / 平均收益（%）
+ * @param {Array<object>} rows
+ * @returns {Array<{ label: string, months: number|null, winRate: number|null, avgReturn: number|null }>}
+ */
+export const mapFundProfitProbabilityRows = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const toMonths = (label) => {
+    const s = pickString(label);
+    if (!s) return null;
+    const mYear = s.match(/([\d.]+)\s*年/);
+    if (mYear) {
+      const n = toFiniteNumber(mYear[1]);
+      return n == null ? null : Math.round(n * 12);
+    }
+    const mMonth = s.match(/([\d.]+)\s*个?月/);
+    if (mMonth) return toFiniteNumber(mMonth[1]);
+    return null;
+  };
+  return rows
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null;
+      const label = pickString(row['持有时长']);
+      if (!label) return null;
+      return {
+        label,
+        months: toMonths(label),
+        winRate: toFiniteNumber(row['盈利概率']),
+        avgReturn: toFiniteNumber(row['平均收益'])
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.months == null ? 1e9 : a.months) - (b.months == null ? 1e9 : b.months));
+};
+
+/**
+ * fund_portfolio_industry_allocation_em 整段 → 行业配置。
+ *
+ * 上游列：序号 / 行业类别 / 占净值比例 / 市值（万元） / 截止时间
+ * 占净值比例是百分数数字（88.4 = 88.4%），按权重降序返回。
+ *
+ * @param {Array<object>} rows
+ * @returns {Array<{ name: string, weight: number|null, marketValue: number|null, reportDate: string|null }>}
+ */
+export const mapFundIndustryRows = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  return rows
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null;
+      const name = pickString(row['行业类别']);
+      if (!name) return null;
+      return {
+        name,
+        weight: toFiniteNumber(row['占净值比例']),
+        marketValue: toFiniteNumber(row['市值']),
+        reportDate: parseChineseDate(row['截止时间'])
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const wa = a.weight == null ? -1 : a.weight;
+      const wb = b.weight == null ? -1 : b.weight;
+      return wb - wa;
+    });
+};
+
+/**
+ * fund_portfolio_bond_hold_em 整段 → 债券持仓。
+ *
+ * 上游列：序号 / 债券代码 / 债券名称 / 占净值比例 / 持仓市值（万元） / 季度（'2026年3季度债券投资明细'）
+ *
+ * @param {Array<object>} rows
+ * @returns {Array<{ code: string|null, name: string|null, weight: number|null,
+ *                   marketValue: number|null, quarter: string|null, reportDate: string|null }>}
+ */
+export const mapFundBondRows = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  return rows
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null;
+      const code = pickString(row['债券代码']);
+      const name = pickString(row['债券名称']);
+      if (!code && !name) return null;
+      const quarter = pickString(row['季度']);
+      return {
+        code,
+        name,
+        weight: toFiniteNumber(row['占净值比例']),
+        marketValue: toFiniteNumber(row['持仓市值']),
+        quarter,
+        reportDate: extractReportDate(quarter)
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const wa = a.weight == null ? -1 : a.weight;
+      const wb = b.weight == null ? -1 : b.weight;
+      return wb - wa;
+    });
+};
+
+/**
+ * fund_portfolio_change_em 整段 → 重大变动（累计买入 / 累计卖出）。
+ *
+ * 上游列：序号 / 股票代码 / 股票名称 / 本期累计买入金额（万元） / 占期初基金资产净值比例（%） / 季度
+ *
+ * @param {Array<object>} rows
+ * @param {'buy'|'sell'} [side] - 区分列名口径（累计卖出时上游列名可能含「卖出」二字）
+ * @returns {Array<{ code: string|null, name: string|null, amount: number|null,
+ *                   weightOfNav: number|null, quarter: string|null, reportDate: string|null }>}
+ */
+export const mapFundChangeRows = (rows, side = 'buy') => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const amountKeys = side === 'sell' ? ['本期累计卖出金额', '本期累计买入金额'] : ['本期累计买入金额'];
+  const weightKeys = ['占期初基金资产净值比例', '占期初基金资产净值比例(%)'];
+  return rows
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null;
+      const code = pickString(row['股票代码']);
+      const name = pickString(row['股票名称']);
+      if (!code && !name) return null;
+      let amount = null;
+      for (const k of amountKeys) {
+        const v = toFiniteNumber(row[k]);
+        if (v != null) {
+          amount = v;
+          break;
+        }
+      }
+      let weightOfNav = null;
+      for (const k of weightKeys) {
+        const v = toFiniteNumber(row[k]);
+        if (v != null) {
+          weightOfNav = v;
+          break;
+        }
+      }
+      const quarter = pickString(row['季度']);
+      return {
+        code,
+        name,
+        amount,
+        weightOfNav,
+        quarter,
+        reportDate: extractReportDate(quarter)
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const aa = a.amount == null ? -1 : a.amount;
+      const ab = b.amount == null ? -1 : b.amount;
+      return ab - aa;
+    });
+};
+
+export const __test__extended = {
+  parseChineseDate,
+  parseScaledAmount,
+  parseFeePercent,
+  toFeeParts,
+  parseRankText
+};

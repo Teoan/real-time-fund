@@ -25,6 +25,8 @@ const AllSectorsModal = dynamic(() => import('./AllSectorsModal'), { ssr: false 
 const DividendMethodModal = dynamic(() => import('./DividendMethodModal'), { ssr: false });
 // 调研初步报告：低频、纯展示（报告在点击入口时已算好），懒加载
 const FundResearchReportModal = dynamic(() => import('./FundResearchReportModal'), { ssr: false });
+// 基金档案：低频、只读（概况/费率/分红/同业/组合），懒加载
+const FundProfileModal = dynamic(() => import('./FundProfileModal'), { ssr: false });
 
 // 高频组件：同步加载
 import ConfirmModal from './ConfirmModal';
@@ -108,6 +110,7 @@ function ModalsLayerContent({ callbacksRef }) {
   const selectHoldingGroupModal = useModalStore((s) => s.selectHoldingGroupModal);
   const dataSourceModal = useModalStore((s) => s.dataSourceModal);
   const fundReportModal = useModalStore((s) => s.fundReportModal);
+  const fundProfileModal = useModalStore((s) => s.fundProfileModal);
   const dcaModal = useModalStore((s) => s.dcaModal);
   const clearConfirm = useModalStore((s) => s.clearConfirm);
   const holdingMigrateDialog = useModalStore((s) => s.holdingMigrateDialog);
@@ -165,6 +168,7 @@ function ModalsLayerContent({ callbacksRef }) {
     _ms({ selectHoldingGroupModal: isFunction(v) ? v(_gs().selectHoldingGroupModal) : v });
   const setDataSourceModal = (v) => _ms({ dataSourceModal: isFunction(v) ? v(_gs().dataSourceModal) : v });
   const setFundReportModal = (v) => _ms({ fundReportModal: isFunction(v) ? v(_gs().fundReportModal) : v });
+  const setFundProfileModal = (v) => _ms({ fundProfileModal: isFunction(v) ? v(_gs().fundProfileModal) : v });
   const setDcaModal = (v) => _ms({ dcaModal: isFunction(v) ? v(_gs().dcaModal) : v });
   const setClearConfirm = (v) => _ms({ clearConfirm: isFunction(v) ? v(_gs().clearConfirm) : v });
   const setHoldingMigrateDialog = (v) =>
@@ -613,6 +617,21 @@ function ModalsLayerContent({ callbacksRef }) {
           <FundResearchReportModal
             report={fundReportModal.report}
             onClose={() => setFundReportModal({ open: false, report: null })}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* ===== Modal: 基金档案（只读：概况/费率/分红/同业/组合） ===== */}
+      <AnimatePresence>
+        {fundProfileModal.open && (
+          <FundProfileModal
+            fundCode={fundProfileModal.fundCode}
+            fundName={
+              fundProfileModal.fundName ||
+              (cb.current.funds || []).find((f) => f?.code === fundProfileModal.fundCode)?.name ||
+              ''
+            }
+            onClose={() => setFundProfileModal({ open: false, fundCode: null, fundName: null, groupId: undefined })}
           />
         )}
       </AnimatePresence>

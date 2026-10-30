@@ -24,6 +24,11 @@ const DEFAULTS = {
    * 因此这里只存结果，不存「指标数据」——避免报告与指标两份状态各自漂移。
    */
   fundReportModal: { open: false, report: null },
+  /**
+   * 基金档案弹框（费率/分红/同业排名/行业配置等 AKShare 单基金接口）。
+   * fundName 只为弹框标题立即显示，正文数据由弹框自己按 fundCode 拉取。
+   */
+  fundProfileModal: { open: false, fundCode: null, fundName: null, groupId: undefined },
   holdingMigrateDialog: { open: false, code: null, name: '', targetGroupId: null },
   cloudConfigModal: { open: false, userId: null, type: null, cloudData: null },
   deviceConflictModal: { open: false, message: '', userId: null, payload: null, isPartial: false },
@@ -60,6 +65,7 @@ const getClosedModalState = () => ({
   addHistoryModal: { ...DEFAULTS.addHistoryModal },
   fundTagsEdit: { ...DEFAULTS.fundTagsEdit },
   fundReportModal: { ...DEFAULTS.fundReportModal },
+  fundProfileModal: { ...DEFAULTS.fundProfileModal },
   clearConfirm: null,
   fundDeleteConfirm: null,
   fundDeleteBulkConfirm: null,
@@ -115,6 +121,7 @@ export const useModalStore = create((set, get) => ({
   addHistoryModal: { ...DEFAULTS.addHistoryModal },
   fundTagsEdit: { ...DEFAULTS.fundTagsEdit },
   fundReportModal: { ...DEFAULTS.fundReportModal },
+  fundProfileModal: { ...DEFAULTS.fundProfileModal },
 
   // ---- Confirm dialogs (truthy/null) ----
   clearConfirm: null,
