@@ -46,7 +46,9 @@ function FundDetailDialog({ cardDialogRow, getFundCardProps, setCardDialogRow })
       s.selectHoldingGroupModal.open ||
       s.addHistoryModal.open ||
       // 调研初步报告从「基金详情」内部打开，必须计入，否则点它会把详情弹框一起关掉
-      s.fundReportModal.open
+      s.fundReportModal.open ||
+      // 基金档案入口就在详情卡片的数据源徽标旁，同理必须计入
+      s.fundProfileModal.open
   );
 
   return (

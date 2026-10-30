@@ -7,13 +7,13 @@ import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { isArray, isNumber, isObject, isString } from 'lodash';
-import { PlusCircle } from 'lucide-react';
+import { PlusCircle, FileText } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from '@/components/ui/empty';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { cn, formatMoney } from '@/lib/utils';
-import { useStorageStore } from '@/app/stores';
+import { useStorageStore, useModalStore } from '@/app/stores';
 import { fetchFundHoldings, fetchFundData } from '@/app/api/fund';
 import { useIsMobile } from '@/app/hooks/useIsMobile';
 import { Stat, ConsecutiveTrendBadge } from '../Common';
@@ -249,6 +249,17 @@ export default function Index({
   }, [funds, fundCode, fallbackFund, fetchedValuation]);
 
   const isAdded = useMemo(() => funds?.some((item) => item.code === f?.code), [funds, f?.code]);
+
+  /**
+   * 打开「基金档案」弹框（费率阶梯 / 分红送配 / 同业排名 / 行业与债券持仓）。
+   * 弹框状态归 modalStore，弹框本体由 ModalsLayer 渲染，这里只负责写入 fundCode。
+   */
+  const openFundProfile = () => {
+    if (!isString(f?.code) || !f.code) return;
+    useModalStore.setState({
+      fundProfileModal: { open: true, fundCode: f.code, fundName: f.name || '', groupId: undefined }
+    });
+  };
 
   // §4.8 校准估值：本地误差历史（近 20 日均偏差显著时）给出校准后的估算涨幅，
   // 只做提示不替换主数值——用户看到的仍是数据源原始口径。
@@ -582,6 +593,43 @@ export default function Index({
               <p>点击切换估值数据源</p>
             </TooltipContent>
           </Tooltip>
+          {/* 基金档案：只在「基金详情」（drawer 模式）里入口，紧挨数据源徽标，
+              与首页卡片的持仓操作（删除/持仓金额）区分开 */}
+          {layoutMode === 'drawer' && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  style={{
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    flexShrink: 0,
+                    height: 26,
+                    padding: '0 8px',
+                    borderRadius: 8,
+                    fontSize: 11,
+                    fontWeight: 500,
+                    background: 'color-mix(in srgb, var(--primary) 12%, transparent)',
+                    color: 'var(--primary)',
+                    border: '1px solid color-mix(in srgb, var(--primary) 28%, transparent)',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation?.();
+                    openFundProfile();
+                  }}
+                >
+                  <FileText size={11} />
+                  <span>档案</span>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>基金档案：费率阶梯 / 分红 / 同业排名 / 行业与债券持仓</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
           <div className="badge-v">
             <span>{f.noValuation ? '净值日期' : '估值时间'}</span>
             <strong>{f.noValuation ? formatDisplayDate(f.jzrq) : formatDisplayDate(f.gztime || f.time)}</strong>
