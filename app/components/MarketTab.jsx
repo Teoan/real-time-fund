@@ -14,7 +14,7 @@ import {
   PlusCircle
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { useReactTable, getCoreRowModel, flexRender } from '@tanstack/react-table';
+import { tableFeatures, useTable, flexRender } from '@tanstack/react-table';
 import { fetchFundValuationRanking, fetchFundPeriodReturns } from '../api/fund';
 import { cn } from '@/lib/utils';
 import { useStorageStore, useModalStore } from '../stores';
@@ -265,10 +265,10 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
     return columns;
   }, [funds, onAddFund]);
 
-  const rankingTable = useReactTable({
+  const rankingTable = useTable({
     data: rankingData || [],
     columns: rankingTableColumns,
-    getCoreRowModel: getCoreRowModel()
+    features: tableFeatures({})
   });
 
   return (

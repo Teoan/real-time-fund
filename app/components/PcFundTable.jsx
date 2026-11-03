@@ -16,7 +16,18 @@ import { isArray, isFunction, isObject, isString, throttle, debounce } from 'lod
 import { AnimatePresence, motion } from 'framer-motion';
 import { useModalStore } from '../stores';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
-import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable } from '@tanstack/react-table';
+import {
+  columnOrderingFeature,
+  columnPinningFeature,
+  columnResizingFeature,
+  columnSizingFeature,
+  columnVisibilityFeature,
+  createPaginatedRowModel,
+  flexRender,
+  rowPaginationFeature,
+  tableFeatures,
+  useTable
+} from '@tanstack/react-table';
 import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
@@ -65,6 +76,16 @@ import DataSourceAccuracyBadge from './DataSourceAccuracyBadge';
 import { useDataSourceAccuracyLabels } from '@/app/hooks/useDataSourceAccuracyLabels';
 
 const EditModeContext = createContext({ isEditMode: false, selectedCodes: null, toggleSelected: null });
+
+const PC_TABLE_FEATURES = tableFeatures({
+  columnOrderingFeature,
+  columnPinningFeature,
+  columnResizingFeature,
+  columnSizingFeature,
+  columnVisibilityFeature,
+  rowPaginationFeature,
+  paginatedRowModel: createPaginatedRowModel()
+});
 
 const NON_FROZEN_COLUMN_IDS = [
   'dataSource',
@@ -2558,9 +2579,10 @@ const PcFundTable = memo(function PcFundTable({
     ]
   );
 
-  const table = useReactTable({
+  const table = useTable({
     data,
     columns,
+    features: PC_TABLE_FEATURES,
     enableColumnPinning: true,
     enableColumnResizing: true,
     columnResizeMode: 'onChange',
@@ -2576,8 +2598,8 @@ const PcFundTable = memo(function PcFundTable({
       columnOrder,
       columnVisibility,
       columnPinning: {
-        left: ['fundName', ...columnOrder.filter((id) => (currentGroupPc?.pcTableColumnPinned || []).includes(id))],
-        right: ['actions']
+        start: ['fundName', ...columnOrder.filter((id) => (currentGroupPc?.pcTableColumnPinned || []).includes(id))],
+        end: ['actions']
       },
       pagination
     },
@@ -2590,12 +2612,10 @@ const PcFundTable = memo(function PcFundTable({
     },
     initialState: {
       columnPinning: {
-        left: ['fundName'],
-        right: ['actions']
+        start: ['fundName'],
+        end: ['actions']
       }
     },
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     autoResetPageIndex: false,
     defaultColumn: {
       cell: (info) => info.getValue() ?? '—'
@@ -2652,14 +2672,14 @@ const PcFundTable = memo(function PcFundTable({
       };
     }
 
-    const isLeft = isPinned === 'left';
-    const isRight = isPinned === 'right';
+    const isLeft = isPinned === 'start';
+    const isRight = isPinned === 'end';
 
     return {
       ...style,
       position: 'sticky',
-      left: isLeft ? `var(--col-${column.id}-start, ${column.getStart('left')}px)` : undefined,
-      right: isRight ? `var(--col-${column.id}-after, ${column.getAfter('right')}px)` : undefined,
+      left: isLeft ? `var(--col-${column.id}-start, ${column.getStart('start')}px)` : undefined,
+      right: isRight ? `var(--col-${column.id}-after, ${column.getAfter('end')}px)` : undefined,
       zIndex: isHeader ? 11 : 10,
       backgroundColor: isHeader ? 'var(--table-pinned-header-bg)' : 'var(--row-bg, var(--bg))',
       boxShadow: 'none',
@@ -2779,11 +2799,11 @@ const PcFundTable = memo(function PcFundTable({
     const vars = {};
     table.getAllLeafColumns().forEach((column) => {
       vars[`--col-${column.id}`] = `${column.getSize()}px`;
-      vars[`--col-${column.id}-start`] = `${column.getStart('left')}px`;
-      vars[`--col-${column.id}-after`] = `${column.getAfter('right')}px`;
+      vars[`--col-${column.id}-start`] = `${column.getStart('start')}px`;
+      vars[`--col-${column.id}-after`] = `${column.getAfter('end')}px`;
     });
     return vars;
-  }, [table.getState().columnSizing, table.getState().columnOrder, table.getState().columnPinning]);
+  }, [table.state.columnSizing, table.state.columnOrder, table.state.columnPinning]);
 
   return (
     <EditModeContext.Provider value={{ isEditMode, selectedCodes, toggleSelected }}>
@@ -3179,8 +3199,8 @@ const PcFundTable = memo(function PcFundTable({
                   每页
                 </span>
                 <Input
-                  key={table.getState().pagination.pageSize}
-                  defaultValue={table.getState().pagination.pageSize}
+                  key={table.state.pagination.pageSize}
+                  defaultValue={table.state.pagination.pageSize}
                   type="number"
                   min={1}
                   className="w-[60px] h-8 text-[16PX] text-center px-2"
@@ -3188,7 +3208,7 @@ const PcFundTable = memo(function PcFundTable({
                     let val = parseInt(e.target.value, 10);
                     if (isNaN(val) || val < 1) val = 20;
                     e.target.value = val;
-                    if (val !== table.getState().pagination.pageSize) {
+                    if (val !== table.state.pagination.pageSize) {
                       table.setPageSize(val);
                       if (typeof window !== 'undefined') {
                         storageStore.setItem('fundTablePageSize', val);
@@ -3223,7 +3243,7 @@ const PcFundTable = memo(function PcFundTable({
                       />
                     </PaginationItem>
                     {Array.from({ length: table.getPageCount() }, (_, i) => {
-                      const pageIndex = table.getState().pagination.pageIndex;
+                      const pageIndex = table.state.pagination.pageIndex;
                       if (i === 0 || i === table.getPageCount() - 1 || (i >= pageIndex - 1 && i <= pageIndex + 1)) {
                         return (
                           <PaginationItem key={i}>

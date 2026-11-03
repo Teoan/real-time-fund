@@ -19,7 +19,7 @@
     "@supabase/supabase-js": "^2.118.0",
     "@tanstack/react-query": "^5.105.3",
     "@tanstack/react-query-devtools": "^5.105.3",
-    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-table": "^9.3.1",
     "@tanstack/react-virtual": "^3.14.25",
     "chart.js": "^4.6.1",
     "class-variance-authority": "^0.7.1",
