@@ -2,9 +2,10 @@
 
 ## Project Overview
 
-This is a **Next.js (App Router)** based real-time mutual fund valuation and portfolio tracking application. It utilizes a **Glassmorphism** UI design and is fully responsive for both mobile and PC. The project is written in **pure JavaScript (JSX)** without TypeScript.
+This is a **Next.js (App Router)** based real-time mutual fund valuation and portfolio tracking application. It utilizes a **Glassmorphism** UI design and is fully responsive for both mobile and PC. The project is written in **pure JavaScript (JSX)** without TypeScript source files (`typescript` is dev-only for the ESLint parser).
 
 ### Key Features & Architecture
+
 - **Offline-First & Persistence**: Uses `localStorage` as the primary database for tracking user portfolios, watchlists, transaction histories, and DCA (Dollar-Cost Averaging) plans.
 - **Optional Cloud Sync**: Integrates with **Supabase** (PostgreSQL, Auth, Edge Functions, Realtime) to synchronize data across multiple devices. Uses `update_user_config_partial` for incremental sync and `postgres_changes` for real-time broadcasts.
 - **CORS Bypass via JSONP**: Fetches financial data directly from Chinese financial APIs (Eastmoney, Tencent, Tiantian Fund) using JSONP and `<script>` tag injection to avoid CORS restrictions in the browser.
@@ -15,10 +16,12 @@ This is a **Next.js (App Router)** based real-time mutual fund valuation and por
 ## Building and Running
 
 ### Prerequisites
-- Node.js >= 20.9.0
+
+- Node.js >= 20.18.1
 - npm
 
 ### Development
+
 1. Clone the repository and install dependencies:
    ```bash
    npm install
@@ -27,7 +30,7 @@ This is a **Next.js (App Router)** based real-time mutual fund valuation and por
    ```bash
    cp env.example .env.local
    ```
-   *(Ensure you configure `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` if testing cloud sync features).*
+   _(Ensure you configure `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` if testing cloud sync features)._
 3. Start the development server:
    ```bash
    npm run dev
@@ -35,13 +38,17 @@ This is a **Next.js (App Router)** based real-time mutual fund valuation and por
    The app will be available at `http://localhost:3000`.
 
 ### Production Build
+
 Since the app uses `output: 'export'`, building it generates a static `out/` directory:
+
 ```bash
 npm run build
 ```
 
 ### Docker
+
 The project includes a `Dockerfile` for containerized deployments using Nginx.
+
 - **Build image**:
   ```bash
   docker build -t real-time-fund --build-arg NEXT_PUBLIC_SUPABASE_URL=xxx --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=xxx .
@@ -50,12 +57,12 @@ The project includes a `Dockerfile` for containerized deployments using Nginx.
   ```bash
   docker run -d -p 3000:3000 --name real-time-fund real-time-fund
   ```
-  *(Environment variables can also be injected at runtime using `-e` or `--env-file` because `entrypoint.sh` handles replacing placeholders in the generated static files).*
+  _(Environment variables can also be injected at runtime using `-e` or `--env-file` because `entrypoint.sh` handles replacing placeholders in the generated static files)._
 
 ## Development Conventions
 
 - **Language**: Pure JavaScript (`.js`, `.jsx`). Do not introduce TypeScript.
-- **Formatting & Linting**: 
+- **Formatting & Linting**:
   - Code is linted via ESLint. Use `npm run lint` and `npm run lint:fix`.
   - The project uses `husky` and `lint-staged` to enforce linting on commits.
 - **State Management**:

@@ -11,31 +11,31 @@ npm run lint         # ESLint (flat config)
 npm run lint:fix     # ESLint auto-fix
 ```
 
-Node >= 20.9.0 required. No test framework is configured.
+Node >= 20.18.1 required. No test framework is configured.
 
 ## Architecture
 
-**real-time-fund** (基估宝) — a pure-JavaScript (JSX, no TypeScript) Next.js 16 App Router application that tracks real-time mutual fund valuations. Deploys as a static site to GitHub Pages (`output: 'export'` in next.config.js).
+**real-time-fund** (基估宝) — a pure-JavaScript source (JSX; `typescript` is dev-only for the ESLint parser, no `.ts`/`tsconfig`) Next.js 16 App Router application that tracks real-time mutual fund valuations. Deploys as a static site to GitHub Pages (`output: 'export'` in next.config.js).
 
-- `app/page.jsx` (~7400 lines) — monolithic SPA entry point: all application state (useState), business logic, and main layout in one file
+- `app/page.jsx` (~5250 lines) — monolithic SPA entry point: all application state (useState), business logic, and main layout in one file
 - `app/api/fund.js` — all external data fetching via JSONP/script tag injection (not fetch) to 天天基金, 东方财富, 腾讯财经
 - `app/stores/` — Zustand stores: `storageStore` (localStorage wrapper, the single source of truth for all user data), `modalStore` (dialog state), `settingsStore`, `userStore`
-- `app/components/` — 47+ app components; `ModalsLayer.jsx` renders all modals centrally
+- `app/components/` — 90 app components; `ModalsLayer.jsx` renders all modals centrally
 - `app/lib/` — utilities: `supabase.js` (optional cloud sync), `tradingCalendar.js`, `valuationTimeseries.js`, `get-query-client.js` (TanStack Query)
 - `app/hooks/` — custom hooks including `useFundFuzzyMatcher.js` (Fuse.js), `useSyncManager.js`, `useRefreshManager.js`
-- `components/ui/` — 15 shadcn/ui primitives (new-york style, Lucide icons)
+- `components/ui/` — 26 shadcn/ui primitives (new-york style, Lucide icons)
 
 Data flow: localStorage (`storageStore`) is the primary database. Supabase sync is optional and secondary. All localStorage reads/writes MUST go through `storageStore` — never use `window.localStorage` directly.
 
 ## Conventions
 
-- **JavaScript only** — no TypeScript anywhere. shadcn configured with `tsx: false`.
+- **JavaScript only** — no TypeScript source. `typescript` is a dev-only ESLint parser dependency; shadcn configured with `tsx: false`.
 - **Lodash for type checks** — use `isFunction`, `isObject`, `isString`, `isNumber`, `isArray`, `isNil`, `isEqual` etc. instead of native `typeof`/`Array.isArray`. Exception: `typeof x === 'undefined'` is allowed for global environment checks (`window`, `document`, `process`).
 - **JSONP + script injection** — all financial API calls use `<script>` tags to bypass CORS, not `fetch()`.
 - **Modal conventions** — modal state lives in `modalStore.js` (Zustand), all modals render in `ModalsLayer.jsx`, page.jsx never subscribes to modal state. Pass page-level functions to modals via `modalCbRef` (a useRef). See AGENTS.md for the full 7-step modal workflow.
 - **Responsive layouts** — `PcFundTable` (desktop) and `MobileFundTable` (mobile) switch at 640px breakpoint.
 - **CSS units** — PC uses `px`; global `px` auto-converts to `rem` via `postcss-pxtorem` (rootValue 16). Inside `@media (max-width: 640px)` blocks, `px` is preserved. Use uppercase `PX` to prevent conversion.
-- **React Compiler** — enabled (`reactCompiler: true`); auto-memoization is active.
+- **React Compiler** — enabled (`reactCompiler: true`); auto-memoization is active. eslint-config-next 16.4's four `react-hooks/*` compiler rules are currently `warn` (see `eslint.config.mjs`).
 - **Linting** — ESLint flat config (`eslint.config.mjs`) + Prettier plugin + lint-staged on pre-commit via Husky.
 
 ## Environment
