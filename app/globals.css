@@ -321,6 +321,15 @@ body::before {
   backdrop-filter: blur(12px);
 }
 
+/* 命令面板：需要比 .glass 更实的背景，避免底层弹框/页面内容透出 */
+.command-palette {
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.985), rgba(15, 23, 42, 0.985));
+}
+
+[data-theme='light'] .command-palette {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.985), rgba(248, 250, 252, 0.985));
+}
+
 /* 亮色主题：按钮样式适配 */
 [data-theme='light'] .button {
   border-color: rgba(8, 145, 178, 0.4);

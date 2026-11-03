@@ -37,6 +37,7 @@ const DEFAULTS = {
 
 const getClosedModalState = () => ({
   settingsOpen: false,
+  commandOpen: false,
   feedbackOpen: false,
   weChatOpen: false,
   donateOpen: false,
@@ -87,6 +88,7 @@ const getClosedModalState = () => ({
 export const useModalStore = create((set, get) => ({
   // ---- Simple boolean modals ----
   settingsOpen: false,
+  commandOpen: false,
   feedbackOpen: false,
   feedbackNonce: 0,
   weChatOpen: false,

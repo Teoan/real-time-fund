@@ -27,6 +27,8 @@ const DividendMethodModal = dynamic(() => import('./DividendMethodModal'), { ssr
 const FundResearchReportModal = dynamic(() => import('./FundResearchReportModal'), { ssr: false });
 // 基金档案：低频、只读（概况/费率/分红/同业/组合），懒加载
 const FundProfileModal = dynamic(() => import('./FundProfileModal'), { ssr: false });
+// 全局命令面板：仅快捷键触发，懒加载
+const CommandPalette = dynamic(() => import('./CommandPalette'), { ssr: false });
 
 // 高频组件：同步加载
 import ConfirmModal from './ConfirmModal';
@@ -82,6 +84,7 @@ function ModalsLayerContent({ callbacksRef }) {
 
   // ========== Modal 开关状态订阅 ==========
   const settingsOpen = useModalStore((s) => s.settingsOpen);
+  const commandOpen = useModalStore((s) => s.commandOpen);
   const feedbackOpen = useModalStore((s) => s.feedbackOpen);
   const feedbackNonce = useModalStore((s) => s.feedbackNonce);
   const weChatOpen = useModalStore((s) => s.weChatOpen);
@@ -979,6 +982,13 @@ function ModalsLayerContent({ callbacksRef }) {
       <AnimatePresence>
         {sortSettingOpen && <SortSettingModal open={sortSettingOpen} onClose={() => setSortSettingOpen(false)} />}
       </AnimatePresence>
+
+      {/* ===== 全局命令面板（⌘K / Ctrl+K） ===== */}
+      <CommandPalette
+        open={commandOpen}
+        onOpenChange={(nextOpen) => useModalStore.setState({ commandOpen: nextOpen })}
+        callbacksRef={callbacksRef}
+      />
     </>
   );
 }
