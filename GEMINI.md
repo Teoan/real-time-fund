@@ -11,7 +11,7 @@ This is a **Next.js (App Router)** based real-time mutual fund valuation and por
 - **CORS Bypass via JSONP**: Fetches financial data directly from Chinese financial APIs (Eastmoney, Tencent, Tiantian Fund) using JSONP and `<script>` tag injection to avoid CORS restrictions in the browser.
 - **Static Export**: The Next.js app is configured for static export (`output: 'export'`), making it highly portable and deployable via GitHub Pages or simple Nginx containers.
 - **Image/OCR Integration**: Uses `tesseract.js` for on-device OCR or a Supabase Edge Function to analyze and import fund holdings from screenshots.
-- **Tech Stack**: Next.js 16 (App Router), React 18, React Query, Zustand, Tailwind CSS v4, Framer Motion, shadcn/ui components, and Supabase.
+- **Tech Stack**: Next.js 16 (App Router), React 19, React Query, Zustand, Tailwind CSS v4, Framer Motion, shadcn/ui components, and Supabase.
 
 ## Building and Running
 
