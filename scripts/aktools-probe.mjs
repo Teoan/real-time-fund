@@ -25,19 +25,51 @@ const TIMEOUT_MS = 15000;
  */
 const PROBES = [
   { fn: 'fund_overview_em', params: { symbol: 'SYMBOL' }, why: '档案-基本概况：管理费/托管费/销售服务费/规模/成立日' },
-  { fn: 'fund_fee_em', params: { symbol: 'SYMBOL', indicator: '申购费率' }, why: '档案-购买信息：申购费率阶梯/起购金额' },
-  { fn: 'fund_fee_em', params: { symbol: 'SYMBOL', indicator: '赎回费率' }, why: '档案-购买信息：赎回费率阶梯（按持有天数）' },
+  {
+    fn: 'fund_fee_em',
+    params: { symbol: 'SYMBOL', indicator: '申购费率' },
+    why: '档案-购买信息：申购费率阶梯/起购金额'
+  },
+  {
+    fn: 'fund_fee_em',
+    params: { symbol: 'SYMBOL', indicator: '赎回费率' },
+    why: '档案-购买信息：赎回费率阶梯（按持有天数）'
+  },
   { fn: 'fund_individual_detail_info_xq', params: { symbol: 'SYMBOL' }, why: '雪球-交易规则：确认日/限购/单日限额' },
   { fn: 'fund_individual_achievement_xq', params: { symbol: 'SYMBOL' }, why: '雪球-业绩详情：同类排名/同类平均' },
-  { fn: 'fund_individual_profit_probability_xq', params: { symbol: 'SYMBOL' }, why: '雪球-盈利概率：持有 1/3/5 年盈利概率' },
-  { fn: 'fund_portfolio_industry_allocation_em', params: { symbol: 'SYMBOL', date: '' }, why: '档案-行业配置：基金自身披露的行业占比' },
-  { fn: 'fund_portfolio_bond_hold_em', params: { symbol: 'SYMBOL', date: '' }, why: '档案-债券持仓：债券型基金可展示持仓' },
-  { fn: 'fund_portfolio_change_em', params: { symbol: 'SYMBOL', indicator: '累计买入', date: '' }, why: '档案-重大变动：本季调仓' },
+  {
+    fn: 'fund_individual_profit_probability_xq',
+    params: { symbol: 'SYMBOL' },
+    why: '雪球-盈利概率：持有 1/3/5 年盈利概率'
+  },
+  {
+    fn: 'fund_portfolio_industry_allocation_em',
+    params: { symbol: 'SYMBOL', date: '' },
+    why: '档案-行业配置：基金自身披露的行业占比'
+  },
+  {
+    fn: 'fund_portfolio_bond_hold_em',
+    params: { symbol: 'SYMBOL', date: '' },
+    why: '档案-债券持仓：债券型基金可展示持仓'
+  },
+  {
+    fn: 'fund_portfolio_change_em',
+    params: { symbol: 'SYMBOL', indicator: '累计买入', date: '' },
+    why: '档案-重大变动：本季调仓'
+  },
   { fn: 'fund_announcement_dividend_em', params: { symbol: 'SYMBOL', date: '' }, why: '档案-分红配送公告：结构化分红' },
   { fn: 'fund_announcement_report_em', params: { symbol: 'SYMBOL', date: '' }, why: '档案-定期报告公告' },
-  { fn: 'fund_announcement_personnel_em', params: { symbol: 'SYMBOL', date: '' }, why: '档案-人事调整公告：经理变更风险' },
+  {
+    fn: 'fund_announcement_personnel_em',
+    params: { symbol: 'SYMBOL', date: '' },
+    why: '档案-人事调整公告：经理变更风险'
+  },
   { fn: 'fund_etf_spot_em', params: {}, why: 'ETF 实时行情：场内折溢价率（全市场表，需谨慎）' },
-  { fn: 'fund_info_index_em', params: { symbol: '沪深指数', indicator: '被动指数型' }, why: '指数型基本信息：跟踪标的指数（全市场表）' }
+  {
+    fn: 'fund_info_index_em',
+    params: { symbol: '沪深指数', indicator: '被动指数型' },
+    why: '指数型基本信息：跟踪标的指数（全市场表）'
+  }
 ];
 
 const parseArgs = (argv) => {
@@ -46,7 +78,11 @@ const parseArgs = (argv) => {
     const a = argv[i];
     if (a === '--json') out.json = true;
     else if (a === '--symbol') out.symbol = argv[++i];
-    else if (a === '--only') out.only = String(argv[++i] || '').split(',').map((s) => s.trim()).filter(Boolean);
+    else if (a === '--only')
+      out.only = String(argv[++i] || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
     else if (a === '--base') out.base = argv[++i];
   }
   return out;
@@ -92,7 +128,17 @@ const probeOne = async ({ base, symbol, spec }) => {
     const elapsedMs = Date.now() - startedAt;
     const bytes = Buffer.byteLength(text, 'utf8');
     if (!res.ok) {
-      return { fn: spec.fn, params: spec.params, url, status: res.status, ok: false, bytes, elapsedMs, why: spec.why, error: text.slice(0, 160).replace(/\s+/g, ' ') };
+      return {
+        fn: spec.fn,
+        params: spec.params,
+        url,
+        status: res.status,
+        ok: false,
+        bytes,
+        elapsedMs,
+        why: spec.why,
+        error: text.slice(0, 160).replace(/\s+/g, ' ')
+      };
     }
     let payload = null;
     let parseError = null;
@@ -130,10 +176,12 @@ const probeOne = async ({ base, symbol, spec }) => {
 };
 
 const humanLine = (r) => {
-  const paramStr = Object.entries(r.params || {}).map(([k, v]) => `${k}=${v}`).join('&');
+  const paramStr = Object.entries(r.params || {})
+    .map(([k, v]) => `${k}=${v}`)
+    .join('&');
   const head = `${r.ok ? '✅' : '❌'} ${r.fn}${paramStr ? `?${paramStr}` : ''}`;
   const size = r.bytes > 1024 ? `${(r.bytes / 1024).toFixed(1)}KB` : `${r.bytes}B`;
-  const shape = r.shape === 'array' ? `${r.rows} 行` : r.shape === 'object' ? '对象' : (r.shape || '?');
+  const shape = r.shape === 'array' ? `${r.rows} 行` : r.shape === 'object' ? '对象' : r.shape || '?';
   const keys = r.keys && r.keys.length ? ` 列: ${r.keys.slice(0, 10).join(' / ')}` : '';
   const err = r.ok ? '' : `  ${r.error || r.parseError || ''}`;
   return `${head} | ${r.status} | ${size} | ${r.elapsedMs}ms | ${shape}${keys}${err}`;
@@ -141,7 +189,12 @@ const humanLine = (r) => {
 
 const main = async () => {
   const args = parseArgs(process.argv.slice(2));
-  const base = (args.base || process.env.AKTOOLS_BASE_URL || process.env.NEXT_PUBLIC_AKTOOLS_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  const base = (
+    args.base ||
+    process.env.AKTOOLS_BASE_URL ||
+    process.env.NEXT_PUBLIC_AKTOOLS_BASE_URL ||
+    DEFAULT_BASE_URL
+  ).replace(/\/+$/, '');
   const specs = args.only ? PROBES.filter((p) => args.only.includes(p.fn)) : PROBES;
   if (!args.json) {
     console.log(`AKTools 探针: ${base}  样本基金: ${args.symbol}  接口数: ${specs.length}\n`);
