@@ -28,9 +28,11 @@
  * @property {boolean} getFundBondHoldings - 债券持仓（fund_portfolio_bond_hold_em）
  * @property {boolean} getFundPortfolioChange - 重大变动/调仓（fund_portfolio_change_em）
  * @property {boolean} getFundAnnouncement - 公告类（dividend/report/personnel 三个接口均 500，不可用）
- * @property {boolean} getFundRank         - 基金排行榜（同类排名由 getFundAchievement 覆盖，不单独实现）
+ * @property {boolean} getFundRank         - 全市场基金业绩排行（fund_open_fund_rank_em：区间收益/手续费，找基金用）
  * @property {boolean} getEtfSpot          - ETF 实时行情（全市场表接口，本实例 15s 超时，不可用）
- * @property {boolean} getFundValuation    - 实时估值（与现有数据源 1/2/3 重复，暂不实现）
+ * @property {boolean} getFundValuationRank - 全市场盘中估值表（fund_value_estimation_em：估算涨幅/实际涨幅/估算偏差）
+ * @property {boolean} getSectorBoard      - 行业/概念板块行情 + 今日主力净流入（热门板块）
+ * @property {boolean} getFundValuation    - 单只基金实时估值（与现有数据源 1/2/3 重复，暂不实现）
  * @property {boolean} getStockFundamentals - A 股个股估值指标（PE/PB/PS/PEG/市值），用于持仓穿透估值
  * @property {boolean} getStockRoe - A 股个股 ROE（加权净资产收益率），东财 F10 直连不可用时的兜底数据源
  * @property {boolean} getStockHkFinancial - 港股个股财务指标快照（含股东权益回报率 ROE），用于港股持仓穿透
@@ -81,9 +83,23 @@ const DEFAULT_CAPABILITIES = {
   // 联调不可用（2026-10-30）：fund_announcement_dividend_em / fund_announcement_report_em /
   // fund_announcement_personnel_em 三个接口均返回 500 Internal Server Error，保持关闭。
   getFundAnnouncement: false,
-  getFundRank: false,
+  // 联调通过（2026-10-31）：fund_open_fund_rank_em 200。
+  // 按 symbol 分类拉全量（AKShare 硬编码 pn=30000，不透传排序/分页参数）：
+  //   全部 20689 行 / 7.76MB / 8.2s；股票型 1101 / 413KB / 0.7s；QDII 225 / 85KB / 0.3s
+  // 返回「近1周/近1月/近3月/近6月/近1年/近2年/近3年/今年来/成立来 + 手续费」，
+  // 补的是项目里唯一缺失的「全市场跨周期业绩榜」（单基金维度的同类排名仍由 getFundAchievement 负责）。
+  getFundRank: true,
   // 联调不可用（2026-10-30）：fund_etf_spot_em 全市场表，15s 超时（已超过探针上限），保持关闭。
   getEtfSpot: false,
+  // 联调通过（2026-11-05）：fund_value_estimation_em 200 / 782 行 / 266KB / ~3.6s。
+  // 这是「估值涨幅/估值跌幅/实际涨幅」三个榜单在 Supabase Edge Function 失联后的替代数据源：
+  // 旧的 api.fund.eastmoney.com/FundGuZhi/GetFundGZList 已下线（恒返回 ErrCode -1「暂无数据」）。
+  // ⚠️ 只支持 symbol=全部（股票型/混合型/债券型/QDII 均返回 0 行，FOF 直接 400）。
+  getFundValuationRank: true,
+  // 联调通过（2026-11-05）：stock_board_industry_name_em 200 / 86 行 / 126KB / ~5.5s；
+  // stock_board_concept_name_em 200 / 440 行 / 136KB / ~5.8s；
+  // stock_sector_fund_flow_rank?indicator=今日&sector_type=行业资金流 200 / 255KB / ~1.7s。
+  getSectorBoard: true,
   getFundValuation: false,
   getStockFundamentals: true,
   // 联调通过（2026-09-19）：stock_financial_analysis_indicator 200 / ~30KB（start_year 限制后）/ ~2.4s。

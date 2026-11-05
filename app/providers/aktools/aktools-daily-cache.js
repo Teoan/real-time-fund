@@ -48,6 +48,14 @@ const CACHE_PREFIX = 'aktools:stockFundamentals:';
 const HK_CACHE_PREFIX = 'aktools:hkValueHistory:';
 /** A 股分位窗口缓存前缀（键：`aktools:stockValueWindow:{symbol}`） */
 const VALUE_WINDOW_CACHE_PREFIX = 'aktools:stockValueWindow:';
+/**
+ * 全市场业绩排行缓存前缀（键：`aktools:fundRankOpen:{分类}`）。
+ *
+ * 单条最大是「全部」裁剪后的 ~1.3MB（20689 行 × 16 字段），远超 localStorage 的 5MB 配额，
+ * 所以必须走 `aktools:` 前缀的 IndexedDB 路由（见 app/lib/storageAsyncKeys.js）。
+ * 这是纯缓存：水合未完成时读不到只会多一次网络请求。
+ */
+const RANK_CACHE_PREFIX = 'aktools:fundRankOpen:';
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 小时强制过期
 const CACHE_VERSION = 1;
 // v2：港股估值序列数据源由 eniu（止于 2022-07-13）改为 baidu（数据到当日）。
@@ -57,11 +65,14 @@ const HK_CACHE_VERSION = 2;
 //     以支持近 6 月 / 近 1 年 / 近 3 年 / 成立来；旧缓存的 recent 太短，必须失效
 // v4：窗口内的走势点新增 price（股息率历史靠价格倒推），旧版缓存的点没有该字段
 const VALUE_WINDOW_CACHE_VERSION = 4;
+/** v1：全市场业绩排行（按分类存整表） */
+const RANK_CACHE_VERSION = 1;
 /** 缓存前缀 → 期望版本（清理工具按族校验版本） */
 const CACHE_FAMILIES = {
   [CACHE_PREFIX]: CACHE_VERSION,
   [HK_CACHE_PREFIX]: HK_CACHE_VERSION,
-  [VALUE_WINDOW_CACHE_PREFIX]: VALUE_WINDOW_CACHE_VERSION
+  [VALUE_WINDOW_CACHE_PREFIX]: VALUE_WINDOW_CACHE_VERSION,
+  [RANK_CACHE_PREFIX]: RANK_CACHE_VERSION
 };
 const CACHE_PREFIXES = Object.keys(CACHE_FAMILIES);
 
@@ -281,6 +292,48 @@ export const writeCachedStockValueWindow = (symbol, window) => {
   writeEntry(`${VALUE_WINDOW_CACHE_PREFIX}${String(symbol || '').trim()}`, VALUE_WINDOW_CACHE_VERSION, window);
 };
 
+/** 业绩排行缓存键（按分类维度） */
+const rankCacheKey = (symbol) => `${RANK_CACHE_PREFIX}${String(symbol || '').trim()}`;
+
+/**
+ * 查询某分类的全市场业绩排行天级缓存。
+ *
+ * @param {string} symbol - 分类名（AKTOOLS_FUND_RANK_SYMBOLS 之一）
+ * @returns {{ symbol: string, rows: Array<object>, total: number, dataDate: string|null,
+ *             source: string, fetchedAt: number }|null}
+ */
+export const getCachedFundRankOpen = (symbol) => {
+  const entries = readEntry(rankCacheKey(symbol), RANK_CACHE_VERSION);
+  if (!entries || !Array.isArray(entries.rows) || entries.rows.length === 0) return null;
+  return entries;
+};
+
+/**
+ * 写入某分类的全市场业绩排行天级缓存。
+ *
+ * ⚠️ 只写入已映射的排行行（16 字段），不要落 AKShare 的 18 列中文键原始表：
+ * 原始「全部」一份就是 7.8MB，IndexedDB 存得下但完全没有必要。
+ *
+ * @param {string} symbol - 分类名
+ * @param {{ rows: Array<object>, total?: number, dataDate?: string|null }} result
+ */
+export const writeCachedFundRankOpen = (symbol, result) => {
+  if (!result || !Array.isArray(result.rows) || result.rows.length === 0) return;
+  writeEntry(
+    rankCacheKey(symbol),
+    RANK_CACHE_VERSION,
+    {
+      symbol: result.symbol || symbol,
+      rows: result.rows,
+      total: Number.isFinite(result.total) ? result.total : result.rows.length,
+      dataDate: result.dataDate || null,
+      source: result.source || 'aktools',
+      fetchedAt: result.fetchedAt || Date.now()
+    },
+    { date: result.dataDate || null }
+  );
+};
+
 /**
  * 清理过期缓存（可选调用，避免 localStorage 积累过多垃圾）。
  * 覆盖本模块全部缓存族：单股估值最新行 + 港股估值序列。
@@ -381,8 +434,10 @@ export const __test__ = {
   CACHE_PREFIX,
   HK_CACHE_PREFIX,
   VALUE_WINDOW_CACHE_PREFIX,
+  RANK_CACHE_PREFIX,
   CACHE_MAX_AGE_MS,
   CACHE_VERSION,
   HK_CACHE_VERSION,
-  VALUE_WINDOW_CACHE_VERSION
+  VALUE_WINDOW_CACHE_VERSION,
+  RANK_CACHE_VERSION
 };

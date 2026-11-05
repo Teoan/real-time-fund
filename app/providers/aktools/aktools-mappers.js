@@ -858,6 +858,236 @@ export const mapFundChangeRows = (rows, side = 'buy') => {
     });
 };
 
+/**
+ * fund_open_fund_rank_em 单行 → 全市场业绩排行项。
+ *
+ * 上游列（18 列，中文键）：
+ *   序号 / 基金代码 / 基金简称 / 日期 / 单位净值 / 累计净值 / 日增长率 /
+ *   近1周 / 近1月 / 近3月 / 近6月 / 近1年 / 近2年 / 近3年 / 今年来 / 成立来 / 自定义 / 手续费
+ *
+ * 处理要点：
+ *   - `手续费` 是 "0.15%" 字符串，用 toFiniteNumber 去掉 % 后存 0.15（百分数口径，与项目内一致）
+ *   - `近2年` / `近3年` 对次新基金是 NaN，归一为 null（UI 端不与 0 混淆）
+ *   - `日期` 形如 '2026-10-30T00:00:00.000'，toIsoDate 截前 10 位
+ *   - `序号` 是上游按「近1年」排的位次，只在同类内有效，本地重排后不再使用，故存为 sourceRank 备查
+ *   - `自定义` 列恒为空（东财自选区间收益，需要额外参数），丢弃
+ *
+ * @param {object} row
+ * @returns {{ code: string, name: string|null, date: string|null, unitNav: number|null,
+ *             accNav: number|null, dayReturn: number|null, week1: number|null, month1: number|null,
+ *             month3: number|null, month6: number|null, year1: number|null, year2: number|null,
+ *             year3: number|null, yearToDate: number|null, sinceInception: number|null,
+ *             feeRate: number|null, sourceRank: number|null }|null}
+ */
+export const mapFundRankRow = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  const code = pickString(row['基金代码']);
+  if (!code) return null;
+  return {
+    code,
+    name: pickString(row['基金简称']),
+    date: toIsoDate(row['日期']),
+    unitNav: toFiniteNumber(row['单位净值']),
+    accNav: toFiniteNumber(row['累计净值']),
+    dayReturn: toFiniteNumber(row['日增长率']),
+    week1: toFiniteNumber(row['近1周']),
+    month1: toFiniteNumber(row['近1月']),
+    month3: toFiniteNumber(row['近3月']),
+    month6: toFiniteNumber(row['近6月']),
+    year1: toFiniteNumber(row['近1年']),
+    year2: toFiniteNumber(row['近2年']),
+    year3: toFiniteNumber(row['近3年']),
+    yearToDate: toFiniteNumber(row['今年来']),
+    sinceInception: toFiniteNumber(row['成立来']),
+    feeRate: toFiniteNumber(row['手续费']),
+    sourceRank: toFiniteNumber(row['序号'])
+  };
+};
+
+/**
+ * fund_open_fund_rank_em 整表 → 业绩排行数组（保持上游顺序，不在此排序）。
+ *
+ * 上游固定按「近1年」降序返回；UI 端要按其它区间排序，所以在展示层重排，
+ * mapper 只负责字段归一，避免「拉数据的排序口径」与「用户选的排序口径」耦合在一起。
+ *
+ * @param {Array<object>} rows
+ * @returns {Array<object>}
+ */
+export const mapFundRankRows = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  return rows.map(mapFundRankRow).filter(Boolean);
+};
+
+// ============================================================================
+// 盘中估值表（fund_value_estimation_em）→ 估值涨幅 / 估值跌幅 / 实际涨幅
+// ============================================================================
+
+/**
+ * 估值表的列名带当日日期前缀：`2026-11-05-估算数据-估算增长率`。
+ * 日期每天在变，绝不能硬编码列名，只能按后缀匹配。
+ */
+const pickColumnBySuffix = (row, suffix) => {
+  if (!row || typeof row !== 'object') return undefined;
+  for (const key of Object.keys(row)) {
+    if (key.endsWith(suffix)) return row[key];
+  }
+  return undefined;
+};
+
+const pickColumnDateBySuffix = (row, suffix) => {
+  if (!row || typeof row !== 'object') return null;
+  for (const key of Object.keys(row)) {
+    if (!key.endsWith(suffix)) continue;
+    return toIsoDate(key.slice(0, key.length - suffix.length));
+  }
+  return null;
+};
+
+/** 上一交易日单位净值：列名恰好是 `YYYY-MM-DD-单位净值`（不能与 `…-公布数据-单位净值` 混淆） */
+const PREV_NAV_KEY_RE = /^\d{4}-\d{2}-\d{2}-单位净值$/;
+const pickPrevNav = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  for (const key of Object.keys(row)) {
+    if (PREV_NAV_KEY_RE.test(key)) return toFiniteNumber(row[key]);
+  }
+  return null;
+};
+
+/**
+ * fund_value_estimation_em 单行 → 盘中估值项。
+ *
+ * 上游列（实测 2026-11-05）：
+ *   序号 / 基金代码 / 基金名称 /
+ *   2026-11-05-估算数据-估算值 / 2026-11-05-估算数据-估算增长率 /
+ *   2026-11-05-公布数据-单位净值 / 2026-11-05-公布数据-日增长率 /
+ *   估算偏差 / 2026-11-04-单位净值
+ *
+ * 处理要点：
+ *   - 百分比字符串 "1.80%" 由 toFiniteNumber 去 % 后存百分数（与项目内口径一致）
+ *   - 交易日切换时上游列的日期会变，所以日期从列名解析，不依赖 row 上的独立字段
+ *   - 缺少某一列（节假日未更新）时对应字段为 null，UI 显示 '--'
+ *
+ * @param {object} row
+ * @returns {{ code: string, name: string|null, date: string|null, estValue: number|null,
+ *             estChange: number|null, nav: number|null, navChange: number|null,
+ *             deviation: number|null, prevNav: number|null }|null}
+ */
+export const mapFundValuationRow = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  const code = pickString(row['基金代码']);
+  if (!code) return null;
+  return {
+    code,
+    name: pickString(row['基金名称']),
+    date: pickColumnDateBySuffix(row, '-估算数据-估算增长率'),
+    estValue: toFiniteNumber(pickColumnBySuffix(row, '-估算数据-估算值')),
+    estChange: toFiniteNumber(pickColumnBySuffix(row, '-估算数据-估算增长率')),
+    nav: toFiniteNumber(pickColumnBySuffix(row, '-公布数据-单位净值')),
+    navChange: toFiniteNumber(pickColumnBySuffix(row, '-公布数据-日增长率')),
+    deviation: toFiniteNumber(row['估算偏差']),
+    prevNav: pickPrevNav(row)
+  };
+};
+
+/**
+ * fund_value_estimation_em 整表 → 估值项数组（保持上游顺序，排序交给调用方）。
+ *
+ * @param {Array<object>} rows
+ * @returns {Array<object>}
+ */
+export const mapFundValuationRows = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  return rows.map(mapFundValuationRow).filter(Boolean);
+};
+
+// ============================================================================
+// 板块行情（stock_board_industry_name_em / stock_board_concept_name_em）
+// ============================================================================
+
+/**
+ * 板块行情单行 → 板块项。
+ *
+ * 上游列：排名 / 板块名称 / 板块代码 / 最新价 / 涨跌额 / 涨跌幅 / 总市值 /
+ *         换手率 / 上涨家数 / 下跌家数 / 领涨股票 / 领涨股票-涨跌幅
+ *
+ * `net_inflow` 上游没有，由调用方用 stock_sector_fund_flow_rank 按板块名合并；
+ * 这里先置 null，避免和「真实为 0 的净流入」混淆。
+ *
+ * @param {object} row
+ * @param {'industry'|'concept'} [type]
+ * @returns {object|null}
+ */
+export const mapSectorBoardRow = (row, type = 'industry') => {
+  if (!row || typeof row !== 'object') return null;
+  const name = pickString(row['板块名称']);
+  if (!name) return null;
+  const sectorType = type === 'concept' ? 'concept' : 'industry';
+  const boardCode = pickString(row['板块代码']);
+  return {
+    id: `${sectorType}:${boardCode || name}`,
+    sector_id: boardCode || name,
+    sector_name: name,
+    sector_type: sectorType,
+    change_pct: toFiniteNumber(row['涨跌幅']),
+    net_inflow: null,
+    leader: pickString(row['领涨股票']),
+    leader_change: toFiniteNumber(row['领涨股票-涨跌幅']),
+    turnover: toFiniteNumber(row['换手率']),
+    up_count: toFiniteNumber(row['上涨家数']),
+    down_count: toFiniteNumber(row['下跌家数']),
+    price: toFiniteNumber(row['最新价'])
+  };
+};
+
+/**
+ * 板块行情整表 → 板块项数组（保持上游排名顺序）。
+ *
+ * @param {Array<object>} rows
+ * @param {'industry'|'concept'} [type]
+ * @returns {Array<object>}
+ */
+export const mapSectorBoardRows = (rows, type = 'industry') => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  return rows.map((row) => mapSectorBoardRow(row, type)).filter(Boolean);
+};
+
+/**
+ * stock_sector_fund_flow_rank 整表 → { 板块名: 今日主力净流入(元) }。
+ *
+ * 上游列：序号 / 名称 / 今日涨跌幅 / 今日主力净流入-净额 / 今日主力净流入-净占比 / …
+ * 只取「今日主力净流入-净额」，超大单/大单/中单/小单项目内暂不展示。
+ *
+ * @param {Array<object>} rows
+ * @returns {Record<string, number|null>}
+ */
+export const mapSectorFundFlowRows = (rows) => {
+  const result = {};
+  if (!Array.isArray(rows) || rows.length === 0) return result;
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const name = pickString(row['名称']);
+    if (!name) continue;
+    result[name] = toFiniteNumber(row['今日主力净流入-净额']);
+  }
+  return result;
+};
+
+/**
+ * 把资金流按板块名合并进板块项（缺资金流数据的板块保留 net_inflow=null）。
+ *
+ * @param {Array<object>} boards
+ * @param {Record<string, number|null>} flowMap
+ * @returns {Array<object>}
+ */
+export const mergeSectorNetInflow = (boards, flowMap) => {
+  if (!Array.isArray(boards) || boards.length === 0) return [];
+  const map = flowMap && typeof flowMap === 'object' ? flowMap : {};
+  return boards.map((board) => ({
+    ...board,
+    net_inflow: Object.prototype.hasOwnProperty.call(map, board.sector_name) ? map[board.sector_name] : null
+  }));
+};
+
 export const __test__extended = {
   parseChineseDate,
   parseScaledAmount,

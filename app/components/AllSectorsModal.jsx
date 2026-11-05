@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '../lib/supabase';
+import { fetchHotSectors } from '../api/fund';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
@@ -41,38 +41,23 @@ export default function AllSectorsModal({ onClose }) {
     }
   };
 
+  // 与 MarketTab 共用同一 queryKey，切到「全部」弹框时直接命中缓存，不重复拉 5~6s 的板块表
   const { data: sectorEstimates } = useQuery({
-    queryKey: ['hotSectors'],
-    queryFn: async () => {
-      try {
-        if (!supabase) return [];
-        const { data, error } = await supabase.from('fund_topic').select('*');
-        if (error) throw error;
-        return data || [];
-      } catch (e) {
-        console.error('Fetch hot sectors error:', e);
-        return [];
-      }
-    },
-    staleTime: 120000
+    queryKey: ['hotSectors', sectorFilter],
+    queryFn: () => fetchHotSectors({ type: sectorFilter }),
+    staleTime: 5 * 60 * 1000
   });
 
   const filteredAndSortedSectors = useMemo(() => {
     if (!sectorEstimates) return [];
 
-    let result = sectorEstimates;
-    if (sectorFilter !== 'all') {
-      result = result.filter((s) => s.sector_type === sectorFilter);
-    }
-
-    result = [...result].sort((a, b) => {
+    // 数据已按 sector_type 取回，这里只负责排序
+    return [...sectorEstimates].sort((a, b) => {
       const valA = a[sectorSort] || 0;
       const valB = b[sectorSort] || 0;
       return sectorSortOrder === 'desc' ? valB - valA : valA - valB;
     });
-
-    return result;
-  }, [sectorEstimates, sectorFilter, sectorSort, sectorSortOrder]);
+  }, [sectorEstimates, sectorSort, sectorSortOrder]);
 
   const formatPercent = (val) => {
     if (val === undefined || val === null || val === '---' || val === '') return '--';

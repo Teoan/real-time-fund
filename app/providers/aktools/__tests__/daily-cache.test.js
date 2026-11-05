@@ -16,6 +16,8 @@ import assert from 'node:assert/strict';
 
 import {
   bindAktoolsCacheStorage,
+  getCachedFundRankOpen,
+  writeCachedFundRankOpen,
   getCachedStockFundamental,
   writeCache,
   cacheStockFundamentalFromRows,
@@ -366,5 +368,48 @@ describe('存储适配器绑定（P1：跟随 storageStore 存 IndexedDB）', ()
     } finally {
       bindAktoolsCacheStorage(null);
     }
+  });
+});
+
+describe('getCachedFundRankOpen / writeCachedFundRankOpen', () => {
+  const result = {
+    symbol: '股票型',
+    rows: [{ code: '002910', name: '易方达供给改革混合', year1: 25.68 }],
+    total: 1,
+    dataDate: '2026-10-30',
+    source: 'aktools',
+    fetchedAt: Date.now()
+  };
+
+  it('写入后可读取（按分类隔离）', () => {
+    writeCachedFundRankOpen('股票型', result);
+    const cached = getCachedFundRankOpen('股票型');
+    assert.equal(cached.symbol, '股票型');
+    assert.equal(cached.rows.length, 1);
+    assert.equal(cached.rows[0].year1, 25.68);
+    assert.equal(cached.dataDate, '2026-10-30');
+    // 其它分类互不干扰
+    assert.equal(getCachedFundRankOpen('混合型'), null);
+  });
+
+  it('空 rows 不写缓存', () => {
+    writeCachedFundRankOpen('QDII', { rows: [] });
+    assert.equal(getCachedFundRankOpen('QDII'), null);
+    assert.equal(mockStorage.getItem('aktools:fundRankOpen:QDII'), null);
+  });
+
+  it('24h 后过期', () => {
+    writeCachedFundRankOpen('债券型', { ...result, symbol: '债券型' });
+    const raw = JSON.parse(mockStorage.getItem('aktools:fundRankOpen:债券型'));
+    raw.ts = Date.now() - 25 * 60 * 60 * 1000;
+    mockStorage.setItem('aktools:fundRankOpen:债券型', JSON.stringify(raw));
+    assert.equal(getCachedFundRankOpen('债券型'), null);
+  });
+
+  it('排行缓存计入统计并可被全量清理', () => {
+    writeCachedFundRankOpen('股票型', result);
+    assert.ok(getAktoolsCacheStats().count >= 1);
+    clearAllAktoolsCache();
+    assert.equal(getCachedFundRankOpen('股票型'), null);
   });
 });

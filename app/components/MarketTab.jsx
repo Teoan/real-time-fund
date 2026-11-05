@@ -10,15 +10,16 @@ import {
   TrendingUp,
   BarChart3,
   Activity,
+  ChevronUp,
   CheckCircle,
   PlusCircle
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
+import { isNumber } from 'lodash';
 import { useReactTable, getCoreRowModel, flexRender } from '@tanstack/react-table';
-import { fetchFundValuationRanking, fetchFundPeriodReturns } from '../api/fund';
+import { fetchFundValuationRanking, fetchFundPeriodReturns, fetchFundRankOpen, fetchHotSectors } from '../api/fund';
 import { cn } from '@/lib/utils';
 import { useStorageStore, useModalStore } from '../stores';
-import { supabase } from '../lib/supabase';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Empty, EmptyTitle, EmptyDescription, EmptyContent, EmptyMedia } from '@/components/ui/empty';
 import { Button } from '@/components/ui/button';
@@ -29,7 +30,44 @@ import FundCard from './FundCard';
 import { Spinner } from '@/components/ui/spinner';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Pagination, PaginationContent, PaginationItem, PaginationLink } from '@/components/ui/pagination';
+
+/**
+ * 业绩排行可选区间：key 与 AKTools mapper（mapFundRankRow）的字段一一对应，
+ * 上游口径为「近1周/近1月/近3月/近6月/近1年/今年来/成立来」。
+ */
+const RANK_PERIODS = [
+  { key: 'week1', label: '近1周' },
+  { key: 'month1', label: '近1月' },
+  { key: 'month3', label: '近3月' },
+  { key: 'month6', label: '近6月' },
+  { key: 'year1', label: '近1年' },
+  { key: 'yearToDate', label: '今年来' },
+  { key: 'sinceInception', label: '成立来' }
+];
+
+/**
+ * 业绩排行分类顺序：按「找基金」的实际使用频率排，默认第一个是股票型。
+ * 与 AKTOOLS_FUND_RANK_SYMBOLS 是子集关系（LOF 与「全部」高度重叠，未在 UI 暴露）。
+ */
+const RANK_SYMBOLS = ['股票型', '混合型', '指数型', '债券型', 'QDII', 'FOF', '全部'];
+
+/** 业绩排行单页码数：与估值榜保持一致，本地分页（全量已在内存） */
+const RANK_PAGE_SIZE = 20;
+
+/** 估值榜单页码数（全量 782 行已在内存，本地分页） */
+const RANKING_PAGE_SIZE = 20;
+
+/**
+ * 榜单 tab → 数据源指标。
+ * 上游（AKTools fund_value_estimation_em）一次给全表，排序全部在本地做，
+ * 所以这里只需要决定「按哪个字段排」，不再有服务端排序参数。
+ */
+const RANKING_TAB_METRIC = Object.freeze({
+  increase: 'estimate',
+  decrease: 'estimate',
+  actual: 'actual',
+  deviation: 'deviation'
+});
 
 function FundDetailDialog({ cardDialogRow, getFundCardProps, setCardDialogRow }) {
   const isAnySubModalOpen = useModalStore(
@@ -93,7 +131,15 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
     }
   }, [detailFund]);
 
-  const [activeTab, setActiveTab] = useState('increase'); // increase, decrease, hot
+  // 业绩排行（全市场跨周期榜）：分类 → 区间 → 排序，全部本地切换（上游无分页/排序参数）
+  const [rankSymbol, setRankSymbol] = useState('股票型');
+  const [rankPeriod, setRankPeriod] = useState('year1');
+  const [rankOrder, setRankOrder] = useState('desc');
+  const [rankPage, setRankPage] = useState(1);
+
+  // increase 估值涨幅 / decrease 估值跌幅 / deviation 估值偏差 / actual 实际涨幅 / performance 业绩排行
+  // 注：原「成交热度」tab 依赖的东财成交量接口已下线，位置改让给同源数据可算的「估值偏差」
+  const [activeTab, setActiveTab] = useState('increase');
   const [sectorFilter, setSectorFilter] = useState('industry'); // industry, concept
   const [sectorSort, setSectorSort] = useState('change_pct'); // change_pct, net_inflow
   const [sectorSortOrder, setSectorSortOrder] = useState('desc'); // desc, asc
@@ -104,65 +150,136 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
   const toggleFavorite = useStorageStore((s) => s.toggleFavorite);
   const funds = useStorageStore((s) => s.funds);
 
-  // Queries for Hot Sectors (Supabase)
+  // 热门板块：AKTools 板块行情（行业/概念分取，按 type 分别缓存，切换时只拉一次）
   const { data: sectorEstimates, isLoading: sectorsLoading } = useQuery({
-    queryKey: ['hotSectors'],
-    queryFn: async () => {
-      try {
-        if (!supabase) return [];
-        const { data, error } = await supabase.from('fund_topic').select('*');
-        if (error) throw error;
-        return data || [];
-      } catch (e) {
-        console.error('Fetch hot sectors error:', e);
-        return [];
-      }
-    },
+    queryKey: ['hotSectors', sectorFilter],
+    queryFn: () => fetchHotSectors({ type: sectorFilter }),
     enabled: !!isActive,
-    staleTime: 120000
+    staleTime: 5 * 60 * 1000
   });
 
   const filteredAndSortedSectors = useMemo(() => {
     if (!sectorEstimates) return [];
 
-    let result = sectorEstimates;
-    if (sectorFilter !== 'all') {
-      result = result.filter((s) => s.sector_type === sectorFilter);
-    }
-
-    result = [...result].sort((a, b) => {
+    // 数据已按 sector_type 取回，这里只负责排序与截断
+    const result = [...sectorEstimates].sort((a, b) => {
       const valA = a[sectorSort] || 0;
       const valB = b[sectorSort] || 0;
       return sectorSortOrder === 'desc' ? valB - valA : valA - valB;
     });
 
     return result.slice(0, isMobile ? 4 : 10);
-  }, [sectorEstimates, sectorFilter, sectorSort, sectorSortOrder, isMobile]);
+  }, [sectorEstimates, sectorSort, sectorSortOrder, isMobile]);
 
-  // Query for Valuation Ranking
-  const { data: rankingData, isLoading: rankingLoading } = useQuery({
-    queryKey: ['valuationRanking', activeTab, pageIndex],
-    queryFn: async () => {
-      let sort = 3;
-      let order = 'desc';
+  const isPerformanceTab = activeTab === 'performance';
 
-      if (activeTab === 'decrease') {
-        sort = 3;
-        order = 'asc';
-      } else if (activeTab === 'hot') {
-        sort = 4; // Using sort=4 for pseudo trading volume
-        order = 'desc';
-      } else if (activeTab === 'actual') {
-        sort = 5;
-        order = 'desc';
-      }
+  // 估值榜（估值涨幅 / 估值跌幅 / 实际涨幅 / 估值偏差）—— AKTools 整表 + 本地排序分页
+  const rankingMetric = RANKING_TAB_METRIC[activeTab] || 'estimate';
+  const rankingOrder = activeTab === 'decrease' ? 'asc' : 'desc';
 
-      const res = await fetchFundValuationRanking(sort, order, pageIndex, 20);
-      return res?.Data?.list || [];
-    },
-    enabled: !!isActive,
-    staleTime: 120000
+  const {
+    data: rankingPage,
+    isLoading: rankingLoading,
+    error: rankingError
+  } = useQuery({
+    queryKey: ['valuationRanking', rankingMetric, rankingOrder, pageIndex],
+    queryFn: () => fetchFundValuationRanking(rankingMetric, rankingOrder, pageIndex, RANKING_PAGE_SIZE),
+    enabled: !!isActive && !isPerformanceTab,
+    staleTime: 60 * 1000
   });
+
+  const rankingData = rankingPage?.Data?.list || [];
+  const rankingAllRecords = rankingPage?.Data?.allRecords || 0;
+  const rankingTotalPages = Math.max(1, Math.ceil(rankingAllRecords / RANKING_PAGE_SIZE));
+
+  // 数据缩水（例如上游当日只回了更少的基金）时把页码拉回有效范围，避免停在空白页
+  useEffect(() => {
+    if (pageIndex > rankingTotalPages) setPageIndex(rankingTotalPages);
+  }, [pageIndex, rankingTotalPages]);
+
+  /**
+   * 业绩排行（AKTools fund_open_fund_rank_em）。
+   *
+   * 按分类取整表（上游无分页），只在该 tab 激活时才请求：
+   * 默认「股票型」一次 ~0.7s/413KB，「全部」则 ~8s/7.8MB，所以不做预取、不并发多分类。
+   * staleTime 1h 与 AKTOOLS_CACHE_TTL.getFundRank 对齐；跨会话靠 IndexedDB 天级缓存（24h）。
+   */
+  const {
+    data: rankData,
+    isLoading: rankLoading,
+    error: rankError
+  } = useQuery({
+    queryKey: ['fundRankOpen', rankSymbol],
+    queryFn: () => fetchFundRankOpen({ symbol: rankSymbol }),
+    enabled: !!isActive && isPerformanceTab,
+    staleTime: 60 * 60 * 1000
+  });
+
+  // 分类/区间/排序变化后回到第 1 页（否则会停在一个已不存在的页码上）
+  useEffect(() => {
+    setRankPage(1);
+  }, [rankSymbol, rankPeriod, rankOrder]);
+
+  const rankPeriodLabel = useMemo(
+    () => RANK_PERIODS.find((item) => item.key === rankPeriod)?.label || '',
+    [rankPeriod]
+  );
+
+  /**
+   * 本地排序：缺值的行（次新基金近1年/近3年为 NaN）统一排到最后，
+   * 不参与数值比较 —— 否则 null 会被当成 0 混进榜尾，看起来像「涨了 0%」。
+   */
+  const rankSortedRows = useMemo(() => {
+    const rows = rankData?.rows || [];
+    if (rows.length === 0) return [];
+    const direction = rankOrder === 'desc' ? -1 : 1;
+    const valued = [];
+    const unvalued = [];
+    for (const row of rows) {
+      if (isNumber(row[rankPeriod])) valued.push(row);
+      else unvalued.push(row);
+    }
+    valued.sort((a, b) => (a[rankPeriod] - b[rankPeriod]) * direction);
+    return valued.concat(unvalued);
+  }, [rankData, rankPeriod, rankOrder]);
+
+  const rankTotalPages = Math.max(1, Math.ceil(rankSortedRows.length / RANK_PAGE_SIZE));
+  const rankSafePage = Math.min(Math.max(1, rankPage), rankTotalPages);
+
+  /**
+   * 当前页行 → 兼容既有字段契约（bzdm / jjjc / dwjz / jzzzl / gxrq）：
+   * 名称列的「加自选」与点击打开的 FundCard 详情弹框都按这套字段取值，
+   * 映射一次即可同时复用两条既有链路，不必为业绩榜另写一套。
+   */
+  const rankPageRows = useMemo(() => {
+    const start = (rankSafePage - 1) * RANK_PAGE_SIZE;
+    return rankSortedRows.slice(start, start + RANK_PAGE_SIZE).map((row, index) => ({
+      ...row,
+      bzdm: row.code,
+      jjjc: row.name,
+      dwjz: row.unitNav,
+      jzzzl: row.dayReturn,
+      gxrq: row.date,
+      gszzl: null,
+      displayRank: start + index + 1,
+      periodReturn: isNumber(row[rankPeriod]) ? row[rankPeriod] : null
+    }));
+  }, [rankSortedRows, rankSafePage, rankPeriod]);
+
+  /** 翻页/切 tab 后把视口拉回榜单区（复用于估值榜与业绩榜） */
+  const scrollToRankingSection = () => {
+    setTimeout(() => {
+      const el = document.getElementById('market-ranking-section');
+      if (!el) return;
+      const navbar = document.querySelector('.navbar');
+      const navHeight = navbar ? navbar.getBoundingClientRect().height : 68;
+      const indexAccordion = document.querySelector('.market-index-accordion-root');
+      const indexHeight = indexAccordion ? indexAccordion.getBoundingClientRect().height : 0;
+      const offset = navHeight + indexHeight + 16;
+      const y = el.getBoundingClientRect().top + window.scrollY - offset;
+      window.scrollTo({ top: y, behavior: 'smooth' });
+    }, 10);
+  };
 
   const formatPercent = (val) => {
     if (val === undefined || val === null || val === '---' || val === '') return '--';
@@ -257,6 +374,9 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
         return (
           <div className="flex flex-col items-end justify-center w-full">
             <span className={cn('text-sm font-bold', getColorClass(fund.gszzl))}>{formatPercent(fund.gszzl)}</span>
+            {isNumber(fund.deviation) && (
+              <span className="text-[10px] opacity-40 mt-0.5 tabular-nums">偏差 {fund.deviation.toFixed(2)}%</span>
+            )}
           </div>
         );
       }
@@ -270,6 +390,110 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
     columns: rankingTableColumns,
     getCoreRowModel: getCoreRowModel()
   });
+
+  /**
+   * 业绩排行列：基金名称 / 区间收益 / 当日涨幅。
+   * 刻意保持 3 列 —— 与估值榜同宽，移动端才不会把基金名挤成两行。
+   * 费率作为名称下方的次级标签展示（找基金时费率是第一顺位筛选条件之一）。
+   */
+  const rankTableColumns = useMemo(
+    () => [
+      {
+        accessorKey: 'bzdm',
+        header: '基金名称',
+        meta: { align: 'text-left', flex: 2 },
+        cell: (info) => {
+          const fund = info.row.original;
+          const isAdded = funds?.some?.((f) => f.code === fund.bzdm);
+          return (
+            <div className="w-full">
+              <div className="flex items-start gap-1.5 mb-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isAdded && onAddFund) {
+                          onAddFund({ code: fund.bzdm, name: fund.jjjc });
+                        }
+                      }}
+                      className={cn(
+                        'focus:outline-none flex-shrink-0 mt-[2px]',
+                        isAdded
+                          ? 'text-[var(--success)] cursor-default'
+                          : 'text-muted-foreground opacity-50 hover:opacity-100 hover:text-primary transition-colors cursor-pointer'
+                      )}
+                      disabled={isAdded}
+                    >
+                      {isAdded ? <CheckCircle size={16} /> : <PlusCircle size={16} />}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{isAdded ? '已添加' : '添加'}</p>
+                  </TooltipContent>
+                </Tooltip>
+                <span
+                  className="font-medium text-sm whitespace-normal break-all leading-snug cursor-pointer hover:text-primary transition-colors"
+                  onClick={() => setDetailFund(fund)}
+                >
+                  {fund.jjjc}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 pl-5 flex-wrap">
+                <span className="text-xs opacity-50">#{fund.bzdm}</span>
+                {isNumber(fund.feeRate) && (
+                  <span className="fund-tag text-[10px] px-1 rounded-sm opacity-60 border border-current">
+                    费率 {fund.feeRate.toFixed(2)}%
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        }
+      },
+      {
+        accessorKey: 'periodReturn',
+        header: rankPeriodLabel ? `${rankPeriodLabel}收益` : '区间收益',
+        meta: { align: 'text-right', flex: 1 },
+        cell: (info) => {
+          const fund = info.row.original;
+          return (
+            <div className="flex flex-col items-end justify-center w-full">
+              <span className={cn('text-sm font-bold', getColorClass(fund.periodReturn))}>
+                {formatPercent(fund.periodReturn)}
+              </span>
+              <span className="text-[10px] opacity-40 mt-0.5">No.{fund.displayRank}</span>
+            </div>
+          );
+        }
+      },
+      {
+        accessorKey: 'jzzzl',
+        header: '当日涨幅',
+        meta: { align: 'text-right', flex: 1 },
+        cell: (info) => {
+          const fund = info.row.original;
+          return (
+            <div className="flex flex-col items-end justify-center w-full">
+              <span className={cn('text-sm font-medium', getColorClass(fund.jzzzl))}>{formatPercent(fund.jzzzl)}</span>
+              <span className="text-xs opacity-50 mt-0.5">{fund.gxrq?.slice(5) || '--'}</span>
+            </div>
+          );
+        }
+      }
+    ],
+    [funds, onAddFund, rankPeriodLabel]
+  );
+
+  const rankTable = useReactTable({
+    data: rankPageRows,
+    columns: rankTableColumns,
+    getCoreRowModel: getCoreRowModel()
+  });
+
+  // 两个榜单共用同一套表格容器/样式：按 tab 切数据源、列与加载态
+  const activeTable = isPerformanceTab ? rankTable : rankingTable;
+  const tableLoading = isPerformanceTab ? rankLoading : rankingLoading;
 
   return (
     <div className="market-tab-container flex flex-col min-h-[60vh]">
@@ -487,15 +711,15 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.8 }}
-                    key="hot"
-                    className={cn('tab', activeTab === 'hot' && 'active')}
+                    key="deviation"
+                    className={cn('tab', activeTab === 'deviation' && 'active')}
                     onClick={() => {
-                      setActiveTab('hot');
+                      setActiveTab('deviation');
                       setPageIndex(1);
                     }}
                     transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
                   >
-                    成交热度
+                    估值偏差
                   </motion.button>
                   <motion.button
                     layout
@@ -512,11 +736,96 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
                   >
                     实际涨幅
                   </motion.button>
+                  <motion.button
+                    layout
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    key="performance"
+                    className={cn('tab', activeTab === 'performance' && 'active')}
+                    onClick={() => {
+                      setActiveTab('performance');
+                      setRankPage(1);
+                    }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
+                  >
+                    业绩排行
+                  </motion.button>
                 </AnimatePresence>
               </div>
             </div>
           </div>
         </div>
+
+        {/* 业绩排行：分类 / 区间 / 排序（全部本地切换，上游无排序分页参数） */}
+        {isPerformanceTab && (
+          <div className="flex flex-col gap-1.5 px-3 pb-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <ToggleGroup
+                type="single"
+                value={rankSymbol}
+                onValueChange={(v) => v && setRankSymbol(v)}
+                className="bg-black/5 dark:bg-white/10 p-0.5 rounded-md border border-black/5 dark:border-white/5 gap-0 shadow-inner flex-shrink-0"
+              >
+                {RANK_SYMBOLS.map((symbol) => (
+                  <ToggleGroupItem
+                    key={symbol}
+                    value={symbol}
+                    className="h-6 px-2 text-[10px] rounded-sm border-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    {symbol}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <ToggleGroup
+                type="single"
+                value={rankPeriod}
+                onValueChange={(v) => v && setRankPeriod(v)}
+                className="bg-black/5 dark:bg-white/10 p-0.5 rounded-md border border-black/5 dark:border-white/5 gap-0 shadow-inner flex-shrink-0"
+              >
+                {RANK_PERIODS.map((period) => (
+                  <ToggleGroupItem
+                    key={period.key}
+                    value={period.key}
+                    className="h-6 px-2 text-[10px] rounded-sm border-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    {period.label}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+              <button
+                onClick={() => setRankOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
+                className="flex items-center gap-0.5 h-7 px-2 rounded-md text-[10px] text-muted-foreground hover:text-foreground border border-black/5 dark:border-white/10 bg-black/5 dark:bg-white/10 transition-colors flex-shrink-0 cursor-pointer"
+              >
+                {rankOrder === 'desc' ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                {rankOrder === 'desc' ? '收益从高到低' : '收益从低到高'}
+              </button>
+            </div>
+            <div className="text-[11px] opacity-60 leading-tight">
+              {rankLoading
+                ? `正在拉取「${rankSymbol}」全市场排行，首次约 1~8 秒（全量接口，无分页参数）…`
+                : rankError
+                  ? `排行加载失败：${rankError.message}`
+                  : rankSortedRows.length > 0
+                    ? `共 ${rankSortedRows.length} 只 · 净值日期 ${rankData?.dataDate || '--'}${rankData?.fromCache ? ' · 本地缓存' : ''}`
+                    : '暂无数据'}
+            </div>
+          </div>
+        )}
+
+        {!isPerformanceTab && (
+          <div className="text-[11px] opacity-60 leading-tight px-3 pb-2">
+            {rankingLoading
+              ? '正在加载全市场估值表（一次整表，首次约 3~4 秒）…'
+              : rankingError
+                ? `榜单加载失败：${rankingError.message}`
+                : rankingAllRecords > 0
+                  ? `共 ${rankingAllRecords} 只 · 净值日期 ${rankingPage?.Data?.dataDate || '--'}${activeTab === 'deviation' ? ' · 按估算偏差排序' : ''}`
+                  : '暂无数据'}
+          </div>
+        )}
 
         <div className="pc-fund-table" style={{ width: '100%', overflow: 'hidden' }}>
           <style>{`
@@ -555,7 +864,7 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
             }
           `}</style>
 
-          {rankingTable.getHeaderGroups().map((hg) => (
+          {activeTable.getHeaderGroups().map((hg) => (
             <div key={hg.id} className="table-header-row market-ranking-table-header">
               {hg.headers.map((header) => {
                 const align = header.column.columnDef.meta?.align || 'text-center';
@@ -593,7 +902,7 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
           ))}
 
           <div className="market-ranking-list">
-            {rankingLoading ? (
+            {tableLoading ? (
               Array.from({ length: 10 }).map((_, index) => (
                 <div
                   key={`skeleton-ranking-${index}`}
@@ -644,8 +953,8 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
                   </div>
                 </div>
               ))
-            ) : rankingTable.getRowModel().rows.length > 0 ? (
-              rankingTable.getRowModel().rows.map((row, index) => (
+            ) : activeTable.getRowModel().rows.length > 0 ? (
+              activeTable.getRowModel().rows.map((row, index) => (
                 <div key={row.id} className={`table-row market-ranking-table-row ${index % 2 === 1 ? 'row-even' : ''}`}>
                   {row.getVisibleCells().map((cell) => {
                     const align = cell.column.columnDef.meta?.align || 'text-center';
@@ -676,44 +985,69 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
           </div>
 
           <div className="py-5 flex justify-end border-t border-[var(--border)] pr-4">
-            <Pagination className="justify-end w-auto mx-0">
-              <PaginationContent>
-                {[1, 2, 3, 4, 5].map((p) => (
-                  <PaginationItem key={p}>
-                    <PaginationLink
-                      onClick={(e) => {
-                        e.preventDefault();
-                        if (pageIndex !== p) {
-                          setPageIndex(p);
-                          // 延迟一点等待数据请求开始，同时滚动到表头
-                          setTimeout(() => {
-                            const el = document.getElementById('market-ranking-section');
-                            if (el) {
-                              // 动态获取固定导航栏的高度，如果找不到则降级使用默认值 68px
-                              const navbar = document.querySelector('.navbar');
-                              const navHeight = navbar ? navbar.getBoundingClientRect().height : 68;
-
-                              // 动态获取大盘指数组件的高度
-                              const indexAccordion = document.querySelector('.market-index-accordion-root');
-                              const indexHeight = indexAccordion ? indexAccordion.getBoundingClientRect().height : 0;
-
-                              // 精准偏移：导航栏高度 + 指数组件高度 + 16px 的视觉留白
-                              const offset = navHeight + indexHeight + 16;
-
-                              const y = el.getBoundingClientRect().top + window.scrollY - offset;
-                              window.scrollTo({ top: y, behavior: 'smooth' });
-                            }
-                          }, 10);
-                        }
-                      }}
-                      isActive={pageIndex === p}
-                    >
-                      {p}
-                    </PaginationLink>
-                  </PaginationItem>
-                ))}
-              </PaginationContent>
-            </Pagination>
+            {isPerformanceTab ? (
+              <div className="flex items-center gap-2 text-xs">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={rankSafePage <= 1 || rankLoading}
+                  onClick={() => {
+                    setRankPage(rankSafePage - 1);
+                    scrollToRankingSection();
+                  }}
+                >
+                  上一页
+                </Button>
+                <span className="opacity-60 tabular-nums">
+                  {rankSafePage} / {rankTotalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={rankSafePage >= rankTotalPages || rankLoading}
+                  onClick={() => {
+                    setRankPage(rankSafePage + 1);
+                    scrollToRankingSection();
+                  }}
+                >
+                  下一页
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-xs">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={pageIndex <= 1 || rankingLoading}
+                  onClick={() => {
+                    const next = Math.max(1, pageIndex - 1);
+                    setPageIndex(next);
+                    scrollToRankingSection();
+                  }}
+                >
+                  上一页
+                </Button>
+                <span className="opacity-60 tabular-nums">
+                  {pageIndex} / {rankingTotalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={pageIndex >= rankingTotalPages || rankingLoading}
+                  onClick={() => {
+                    const next = Math.min(rankingTotalPages, pageIndex + 1);
+                    setPageIndex(next);
+                    scrollToRankingSection();
+                  }}
+                >
+                  下一页
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 
 import { createAktoolsProvider } from '../aktools-provider.js';
 import { createAktoolsClient } from '../aktools-client.js';
-import { FundNotFoundError, AktoolsUnsupportedError } from '../aktools-errors.js';
+import { FundNotFoundError, AktoolsUnsupportedError, AktoolsError } from '../aktools-errors.js';
 
 const okJson = (body) => ({
   ok: true,
@@ -936,5 +936,247 @@ describe('AKTools Provider - clearCache', () => {
       provider.clearCache();
       provider.clearCache();
     });
+  });
+});
+
+describe('AKTools Provider - getFundRankOpen', () => {
+  const rankRows = [
+    {
+      序号: 1,
+      基金代码: '002910',
+      基金简称: '易方达供给改革混合',
+      日期: '2026-10-30T00:00:00.000',
+      近1年: 25.68,
+      手续费: '0.15%'
+    },
+    { 序号: 2, 基金代码: '000001', 基金简称: '华夏成长', 日期: '2026-10-30T00:00:00.000', 近1年: -3.2, 手续费: '0.15%' }
+  ];
+
+  it('正常响应 → 映射行 + total + dataDate', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: rankRows }),
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundRank: true }
+        });
+        const out = await provider.getFundRankOpen({ symbol: '股票型' });
+        assert.equal(out.symbol, '股票型');
+        assert.equal(out.total, 2);
+        assert.equal(out.dataDate, '2026-10-30');
+        assert.equal(out.source, 'aktools');
+        assert.equal(out.rows[0].code, '002910');
+        assert.equal(out.rows[0].year1, 25.68);
+        assert.equal(out.rows[0].feeRate, 0.15);
+      }
+    );
+  });
+
+  it('limit 截断返回行但 total 仍为全量', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: rankRows }),
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundRank: true }
+        });
+        const out = await provider.getFundRankOpen({ symbol: '股票型', limit: 1 });
+        assert.equal(out.rows.length, 1);
+        assert.equal(out.total, 2);
+      }
+    );
+  });
+
+  it('分类不在白名单 → AktoolsError（不发起请求）', async () => {
+    let called = 0;
+    await withMockFetch(
+      async () => {
+        called += 1;
+        return okJson({ success: true, data: rankRows });
+      },
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundRank: true }
+        });
+        await assert.rejects(provider.getFundRankOpen({ symbol: '货币型' }), AktoolsError);
+        assert.equal(called, 0);
+      }
+    );
+  });
+
+  it('能力未启用 → AktoolsUnsupportedError（不发起请求）', async () => {
+    let called = 0;
+    await withMockFetch(
+      async () => {
+        called += 1;
+        return okJson({ success: true, data: rankRows });
+      },
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundRank: false }
+        });
+        await assert.rejects(provider.getFundRankOpen({ symbol: '股票型' }), AktoolsUnsupportedError);
+        assert.equal(called, 0);
+      }
+    );
+  });
+
+  it('上游空表 → AktoolsError', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [] }),
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundRank: true }
+        });
+        await assert.rejects(provider.getFundRankOpen({ symbol: 'QDII' }), AktoolsError);
+      }
+    );
+  });
+});
+
+describe('AKTools Provider - getFundValuationRank', () => {
+  const valuationRows = [
+    {
+      基金代码: '000008',
+      基金名称: '嘉实中证500ETF联接A',
+      '2026-11-05-估算数据-估算增长率': '1.80%',
+      '2026-11-05-公布数据-日增长率': '1.69%',
+      估算偏差: '0.11%'
+    },
+    {
+      基金代码: '000042',
+      基金名称: '财通中证ESG100指数增强A',
+      '2026-11-05-估算数据-估算增长率': '-2.10%',
+      '2026-11-05-公布数据-日增长率': '--',
+      估算偏差: '0.32%'
+    }
+  ];
+
+  it('正常响应 → 映射行 + total + dataDate', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: valuationRows }),
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundValuationRank: true }
+        });
+        const out = await provider.getFundValuationRank();
+        assert.equal(out.total, 2);
+        assert.equal(out.dataDate, '2026-11-05');
+        assert.equal(out.source, 'aktools');
+        assert.equal(out.rows[0].code, '000008');
+        assert.equal(out.rows[0].estChange, 1.8);
+        assert.equal(out.rows[1].navChange, null);
+      }
+    );
+  });
+
+  it('limit 截断返回行但 total 仍为全量', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: valuationRows }),
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundValuationRank: true }
+        });
+        const out = await provider.getFundValuationRank({ limit: 1 });
+        assert.equal(out.rows.length, 1);
+        assert.equal(out.total, 2);
+      }
+    );
+  });
+
+  it('能力未启用 → AktoolsUnsupportedError（不发起请求）', async () => {
+    let called = 0;
+    await withMockFetch(
+      async () => {
+        called += 1;
+        return okJson({ success: true, data: valuationRows });
+      },
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundValuationRank: false }
+        });
+        await assert.rejects(provider.getFundValuationRank(), AktoolsUnsupportedError);
+        assert.equal(called, 0);
+      }
+    );
+  });
+
+  it('上游空表 → AktoolsError', async () => {
+    await withMockFetch(
+      async () => okJson({ success: true, data: [] }),
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getFundValuationRank: true }
+        });
+        await assert.rejects(provider.getFundValuationRank(), AktoolsError);
+      }
+    );
+  });
+});
+
+describe('AKTools Provider - getSectorBoards', () => {
+  const boardRows = [
+    {
+      排名: 1,
+      板块名称: '光伏辅材',
+      板块代码: 'BK1316',
+      涨跌幅: 9.94,
+      领涨股票: '永臻股份',
+      '领涨股票-涨跌幅': 9.98
+    }
+  ];
+  const flowRows = [{ 序号: 1, 名称: '光伏辅材', '今日主力净流入-净额': 6310020864.0 }];
+
+  const routedHandler = (url) =>
+    okJson({ success: true, data: String(url).includes('stock_sector_fund_flow_rank') ? flowRows : boardRows });
+
+  it('板块表 + 资金流合并', async () => {
+    await withMockFetch(routedHandler, async () => {
+      const provider = createAktoolsProvider({
+        client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+        capabilities: { getSectorBoard: true }
+      });
+      const out = await provider.getSectorBoards({ type: 'industry' });
+      assert.equal(out.type, 'industry');
+      assert.equal(out.total, 1);
+      assert.equal(out.rows[0].sector_name, '光伏辅材');
+      assert.equal(out.rows[0].net_inflow, 6310020864.0);
+    });
+  });
+
+  it('资金流失败不拖垮板块列表（net_inflow 保持 null）', async () => {
+    await withMockFetch(
+      async (url) => {
+        if (String(url).includes('stock_sector_fund_flow_rank')) {
+          return { ok: false, status: 500, json: async () => ({}) };
+        }
+        return okJson({ success: true, data: boardRows });
+      },
+      async () => {
+        const provider = createAktoolsProvider({
+          client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+          capabilities: { getSectorBoard: true }
+        });
+        const out = await provider.getSectorBoards({ type: 'concept' });
+        assert.equal(out.rows.length, 1);
+        assert.equal(out.rows[0].net_inflow, null);
+        assert.equal(out.type, 'concept');
+      }
+    );
+  });
+
+  it('能力未启用 → AktoolsUnsupportedError', async () => {
+    const provider = createAktoolsProvider({
+      client: createAktoolsClient({ baseUrl: 'http://mock', retries: 0 }),
+      capabilities: { getSectorBoard: false }
+    });
+    await assert.rejects(provider.getSectorBoards(), AktoolsUnsupportedError);
   });
 });

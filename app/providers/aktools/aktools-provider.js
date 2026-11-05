@@ -15,6 +15,9 @@
  *   getFundIndustryAllocation(code) -> { items: [{ name, weight, reportDate }] }
  *   getFundBondHoldings(code)       -> { items: [{ code, name, weight }] }
  *   getFundPortfolioChange(code, side) -> { indicator, items: [{ code, name, amount }] }
+ *   getFundRankOpen({ symbol, limit }) -> { symbol, rows: [{ code, name, year1, ... }], total, dataDate }
+ *   getFundValuationRank({ limit }) -> { rows: [{ code, estChange, navChange, deviation, ... }], total, dataDate }
+ *   getSectorBoards({ type }) -> { type, rows: [{ sector_name, sector_type, change_pct, net_inflow }], total }
  *
  * 所有方法使用注入的缓存抽象（默认 no-op；业务侧通过 createAktoolsProviderForApp 注入真实缓存）
  * 不实现的接口直接抛 AktoolsUnsupportedError，由调用方决定 fallback。
@@ -24,6 +27,7 @@ import { FundNotFoundError, AktoolsError, AktoolsUnsupportedError } from './akto
 import {
   AKTOOLS_CACHE_TTL,
   AKTOOLS_ENDPOINTS,
+  AKTOOLS_FUND_RANK_SYMBOLS,
   AKTOOLS_HK_VALUATION_INDICATORS,
   AKTOOLS_HK_VALUATION_PERIOD,
   AKTOOLS_METADATA
@@ -37,7 +41,12 @@ import {
   mapFundFeeTiers,
   mapFundIndustryRows,
   mapFundOverviewSnapshot,
+  mapFundRankRows,
   mapFundProfitProbabilityRows,
+  mapFundValuationRows,
+  mapSectorBoardRows,
+  mapSectorFundFlowRows,
+  mergeSectorNetInflow,
   mapHoldingRow,
   mapNavHistoryRow,
   mapOverviewRows,
@@ -816,6 +825,143 @@ export function createAktoolsProvider(options = {}) {
     return items.filter((item) => item.reportDate === best);
   };
 
+  /**
+   * 全市场基金业绩排行（fund_open_fund_rank_em）。
+   *
+   * 与 getFundAchievement 的分工：
+   *   - getFundAchievement 回答「这只基金在同类里排多少」（如 93/1138），单只粒度；
+   *   - 本方法回答「全市场谁涨得最多」，一次给出某分类下**全部**基金的区间收益，
+   *     用于 MarketTab 的「业绩排行」发现基金，是项目里唯一缺失的全市场跨周期榜单。
+   *
+   * ⚠️ 上游没有分页/排序参数：AKShare 在源码里硬编码 pn=30000，东财的 `sc` 排序参数
+   *    也无法通过 AKTools 透传（AKTools 只按函数签名拼 query），所以每次调用都是该分类全量。
+   *    体积/耗时：股票型 413KB/0.7s、QDII 85KB/0.3s、混合型 3.2MB/3.4s、全部 7.8MB/8.2s。
+   *    ⇒ 调用方必须依赖 TTL 缓存，不要在滚动/翻页等交互里重复触发。
+   *
+   * @param {{ symbol?: string, limit?: number }} [options]
+   *   symbol 取 AKTOOLS_FUND_RANK_SYMBOLS（默认「股票型」：体量小且是主动权益主战场）
+   *   limit 仅用于截断返回（缓存仍保留全量），供「只要前 N 名」的场景省内存
+   * @returns {Promise<{ symbol: string, rows: Array<object>, total: number,
+   *                     dataDate: string|null, source: string, fetchedAt: number }>}
+   */
+  const getFundRankOpen = async ({ symbol, limit } = {}) => {
+    if (!isCapabilitySupported(capabilities, 'getFundRank')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundRank');
+    }
+    const s = String(symbol || '股票型').trim() || '股票型';
+    if (!AKTOOLS_FUND_RANK_SYMBOLS.includes(s)) {
+      throw new AktoolsError(`不支持的排行分类: ${s}（可选 ${AKTOOLS_FUND_RANK_SYMBOLS.join('/')}）`);
+    }
+
+    const result = await fetchCached(
+      ['fundRankOpen', s],
+      async () => {
+        const raw = await client.call(AKTOOLS_ENDPOINTS.getFundRank, { symbol: s });
+        const rows = mapFundRankRows(raw);
+        if (rows.length === 0) {
+          throw new AktoolsError(`AKTools 未返回排行数据: ${s}`);
+        }
+        // 各分类的净值日期可能不同（QDII 常落后一天），取最大日期作为整表的「数据日期」
+        let dataDate = null;
+        for (const row of rows) {
+          if (row.date && (!dataDate || row.date > dataDate)) dataDate = row.date;
+        }
+        return { symbol: s, rows, total: rows.length, dataDate, source: 'aktools', fetchedAt: Date.now() };
+      },
+      AKTOOLS_CACHE_TTL.getFundRank
+    );
+
+    if (Number.isFinite(limit) && limit > 0 && limit < result.rows.length) {
+      return { ...result, rows: result.rows.slice(0, limit) };
+    }
+    return result;
+  };
+
+  /**
+   * 全市场盘中估值表（fund_value_estimation_em）。
+   *
+   * 用于替代已下线的东财估值榜 JSONP（`api.fund.eastmoney.com/FundGuZhi/GetFundGZList`
+   * 现在恒返回 ErrCode -1「暂无数据」），也是原 Supabase Edge Function
+   * `fund-valuation-ranking` 的上游 —— 所以那个函数同样取不到数据。
+   *
+   * 一次返回整表（实测 782 行 / 266KB / ~3.6s），排序与分页全部由调用方在本地完成：
+   *   - 按 estChange 排序 → 估值涨幅榜 / 估值跌幅榜
+   *   - 按 navChange 排序 → 实际涨幅榜
+   *   - 按 |deviation| 排序 → 估值偏差榜（估算与实际偏离最大的基金）
+   *
+   * ⚠️ 上游只支持 symbol=全部：股票型/混合型/指数型/债券型/QDII 传进去均返回 0 行，
+   *    FOF 直接报参数错误。故本方法不接受 symbol，避免把非法参数透传给上游。
+   *
+   * @param {{ limit?: number }} [options]
+   * @returns {Promise<{ rows: Array<object>, total: number, dataDate: string|null,
+   *                     source: string, fetchedAt: number }>}
+   */
+  const getFundValuationRank = async ({ limit } = {}) => {
+    if (!isCapabilitySupported(capabilities, 'getFundValuationRank')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getFundValuationRank');
+    }
+
+    const result = await fetchCached(
+      ['fundValuationRank'],
+      async () => {
+        const raw = await client.call(AKTOOLS_ENDPOINTS.getFundValuationRank);
+        const rows = mapFundValuationRows(raw);
+        if (rows.length === 0) {
+          throw new AktoolsError('AKTools 未返回估值数据（可能是节假日上游未更新）');
+        }
+        let dataDate = null;
+        for (const row of rows) {
+          if (row.date && (!dataDate || row.date > dataDate)) dataDate = row.date;
+        }
+        return { rows, total: rows.length, dataDate, source: 'aktools', fetchedAt: Date.now() };
+      },
+      AKTOOLS_CACHE_TTL.getFundValuationRank
+    );
+
+    if (Number.isFinite(limit) && limit > 0 && limit < result.rows.length) {
+      return { ...result, rows: result.rows.slice(0, limit) };
+    }
+    return result;
+  };
+
+  /**
+   * 行业 / 概念板块行情 + 今日主力净流入（热门板块）。
+   *
+   * 两个上游合并而成：
+   *   1. stock_board_industry_name_em / stock_board_concept_name_em —— 涨跌幅、领涨股
+   *   2. stock_sector_fund_flow_rank(indicator='今日', sector_type=行业资金流/概念资金流) —— 净流入
+   * 资金流按「板块名」合并（两张表同源东财，名称一致），缺数据的板块 net_inflow 为 null。
+   *
+   * @param {{ type?: 'industry'|'concept' }} [options]
+   * @returns {Promise<{ type: string, rows: Array<object>, total: number, source: string, fetchedAt: number }>}
+   */
+  const getSectorBoards = async ({ type = 'industry' } = {}) => {
+    if (!isCapabilitySupported(capabilities, 'getSectorBoard')) {
+      throw new AktoolsUnsupportedError('AKTools Provider 未启用 getSectorBoard');
+    }
+    const sectorType = type === 'concept' ? 'concept' : 'industry';
+    const boardEndpoint =
+      sectorType === 'concept' ? AKTOOLS_ENDPOINTS.getSectorBoardConcept : AKTOOLS_ENDPOINTS.getSectorBoardIndustry;
+    const flowType = sectorType === 'concept' ? '概念资金流' : '行业资金流';
+
+    return fetchCached(
+      ['sectorBoards', sectorType],
+      async () => {
+        const [boardRaw, flowRaw] = await Promise.all([
+          client.call(boardEndpoint),
+          // 资金流是加分项：失败不该拖垮整个板块列表，故单独兜底为空数组
+          client.call(AKTOOLS_ENDPOINTS.getSectorFundFlow, { indicator: '今日', sector_type: flowType }).catch(() => [])
+        ]);
+        const boards = mergeSectorNetInflow(mapSectorBoardRows(boardRaw, sectorType), mapSectorFundFlowRows(flowRaw));
+        if (boards.length === 0) {
+          throw new AktoolsError(`AKTools 未返回板块数据: ${sectorType}`);
+        }
+        return { type: sectorType, rows: boards, total: boards.length, source: 'aktools', fetchedAt: Date.now() };
+      },
+      AKTOOLS_CACHE_TTL.getSectorBoard
+    );
+  };
+
   const healthCheck = async () => client.healthCheck();
 
   return {
@@ -828,6 +974,9 @@ export function createAktoolsProvider(options = {}) {
     getFundHoldings,
     getFundsLatestNavBatch,
     getFundOverview,
+    getFundRankOpen,
+    getFundValuationRank,
+    getSectorBoards,
     getFundFeeTiers,
     getFundDividendDetail,
     getFundAchievement,

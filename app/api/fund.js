@@ -12,10 +12,12 @@ import { isSupabaseConfigured, supabase, canUseSupabaseBusiness, tripSupabaseCir
 import { isTradingDay } from '../lib/tradingCalendar';
 import { AKTOOLS_PROVIDER } from '@/app/providers/aktools';
 import {
+  getCachedFundRankOpen,
   getCachedStockFundamental,
   getCachedStockHkValueHistory,
   getCachedStockValueWindow,
   writeCache as writeStockFundamentalCache,
+  writeCachedFundRankOpen,
   writeCachedStockHkValueHistory,
   writeCachedStockValueWindow
 } from '@/app/providers/aktools/aktools-daily-cache';
@@ -3208,29 +3210,173 @@ export const parseFundTextWithLLM = async (text) => {
   }
 };
 
+// ============================================================================
+// 行情页榜单（估值涨幅 / 估值跌幅 / 实际涨幅 / 估值偏差）
+//
+// 历史沿革（数据源为什么换过两次，别改回去）：
+//   1. 最初：天天基金 JSONP `api.fund.eastmoney.com/FundGuZhi/GetFundGZList`
+//      → 东财已下线该接口，现在无论带不带 Referer 都返回 ErrCode -1「暂无数据」。
+//   2. 之后：Supabase Edge Function `fund-valuation-ranking` 代理同一个上游
+//      → 上游既然没有数据，函数本身也就只有壳；且本项目对应的 Supabase 实例已失联（DNS NXDOMAIN）。
+//   3. 现在：AKTools `fund_value_estimation_em`（东财估值表，公开数据，不依赖登录/云函数）
+//      实测 782 行 / 266KB / ~3.6s，一次给全表，排序分页全在本地做。
+// ============================================================================
+
 /**
- * 通过 Supabase Edge Function 获取天天基金估值排行
- * @param {string|number} sort 排序字段 (3:估值涨幅, 4:成交热度, 5:实际涨幅)
- * @param {string} order 排序方向 (desc | asc)
- * @param {number} page 页码
- * @param {number} pageSize 每页条数
- * @returns {Promise<{Data: {list: Array, allRecords: number}} | null>}
+ * 榜单指标 → 排序口径。
+ *   3 = 估值涨幅榜（估算增长率）
+ *   4 = 估值偏差榜（|估算偏差|）—— 上游已无「成交热度」数据，该位置改给出信息量更大的偏差榜
+ *   5 = 实际涨幅榜（公布日增长率）
  */
-export const fetchFundValuationRanking = async (sort = 3, order = 'desc', page = 1, pageSize = 20) => {
-  if (!isSupabaseConfigured) return null;
-  if (!supabase?.functions?.invoke) return null;
+export const FUND_VALUATION_METRICS = Object.freeze({
+  3: 'estimate',
+  4: 'deviation',
+  5: 'actual'
+});
 
-  const { data, error } = await withRetry(() =>
-    supabase.functions.invoke('fund-valuation-ranking', {
-      body: { sort, order, page, pageSize }
-    })
-  );
+/** 指标 → 估值表字段 */
+const VALUATION_METRIC_FIELD = Object.freeze({
+  estimate: 'estChange',
+  actual: 'navChange',
+  deviation: 'deviation'
+});
 
-  if (error) throw new Error(error.message || '加载估值排行失败');
-  if (!data || data.success !== true) throw new Error(data?.error || '加载估值排行失败');
+/** 估值表行 → 榜单行（字段名保持既有契约：bzdm/jjjc/gszzl/jzzzl/gxrq） */
+const toValuationRankingRow = (row) => ({
+  bzdm: row.code,
+  jjjc: row.name,
+  gxrq: row.date,
+  gszzl: row.estChange,
+  jzzzl: row.navChange,
+  deviation: row.deviation,
+  estValue: row.estValue,
+  // 详情弹框按 dwjz/gsz 取值，顺便补上，省得点开先空一屏再自己拉
+  dwjz: row.nav,
+  gsz: row.estValue,
+  FType: null
+});
 
-  // 保持与原 JSONP 返回结构一致：{ Data: { list: [...], ... } }
-  return { Data: data.data };
+/**
+ * 本地排序：缺值的行统一沉到榜尾，不参与数值比较。
+ * 否则 null 会被当成 0 混在中间，看起来像「涨了 0%」。
+ */
+const sortValuationRows = (rows, metric, order) => {
+  const field = VALUATION_METRIC_FIELD[metric] || VALUATION_METRIC_FIELD.estimate;
+  const direction = order === 'asc' ? 1 : -1;
+  // 估算偏差可正可负（估算 > 实际 / 估算 < 实际），「偏差榜」要看偏离幅度，必须比较绝对值
+  const useAbs = metric === 'deviation';
+  const valueOf = (row) => (useAbs ? Math.abs(row[field]) : row[field]);
+  const valued = [];
+  const missing = [];
+  for (const row of rows) {
+    if (isNumber(row[field])) valued.push(row);
+    else missing.push(row);
+  }
+  valued.sort((a, b) => (valueOf(a) - valueOf(b)) * direction);
+  return valued.concat(missing);
+};
+
+/**
+ * 行情页榜单数据（估值涨幅 / 估值跌幅 / 实际涨幅 / 估值偏差）。
+ *
+ * @param {'estimate'|'actual'|'deviation'|3|4|5} [metric] 指标，接受旧调用传入的数字编码
+ * @param {'desc'|'asc'} [order] 排序方向
+ * @param {number} [page] 页码（1 起）
+ * @param {number} [pageSize] 每页条数
+ * @returns {Promise<{ Data: { list: Array<object>, allRecords: number, pageIndex: number,
+ *                             pageSize: number, metric: string, order: string,
+ *                             dataDate: string|null, fetchedAt: number } }>}
+ */
+export const fetchFundValuationRanking = async (metric = 'estimate', order = 'desc', page = 1, pageSize = 20) => {
+  const normalizedMetric =
+    isString(metric) && VALUATION_METRIC_FIELD[metric] ? metric : FUND_VALUATION_METRICS[metric] || 'estimate';
+  const normalizedOrder = order === 'asc' ? 'asc' : 'desc';
+  const safePage = isNumber(page) && page > 0 ? Math.floor(page) : 1;
+  const safePageSize = isNumber(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 20;
+
+  // Provider 侧 1 分钟内存缓存；这里不再叠加天级缓存 —— 盘中估值分钟级变化，落盘只会更错
+  const { rows, dataDate, fetchedAt } = await AKTOOLS_PROVIDER.getFundValuationRank();
+  const sorted = sortValuationRows(rows.map(toValuationRankingRow), normalizedMetric, normalizedOrder);
+  const start = (safePage - 1) * safePageSize;
+
+  return {
+    Data: {
+      list: sorted.slice(start, start + safePageSize),
+      allRecords: sorted.length,
+      pageIndex: safePage,
+      pageSize: safePageSize,
+      metric: normalizedMetric,
+      order: normalizedOrder,
+      dataDate,
+      fetchedAt
+    }
+  };
+};
+
+/**
+ * 热门板块（行业 / 概念）：涨跌幅 + 今日主力净流入。
+ *
+ * 原实现读 Supabase `fund_topic` 表（该实例已失联），改为 AKTools 板块行情 + 板块资金流。
+ * 与榜单不同，板块表单项就 86/440 行、5~6s，所以按 type 分开取，别一次全拉。
+ *
+ * @param {{ type?: 'industry'|'concept'|'all' }} [options]
+ * @returns {Promise<Array<{ id: string, sector_name: string, sector_type: string,
+ *                           change_pct: number|null, net_inflow: number|null }>>}
+ */
+export const fetchHotSectors = async ({ type = 'industry' } = {}) => {
+  if (type === 'all') {
+    const [industry, concept] = await Promise.all([
+      AKTOOLS_PROVIDER.getSectorBoards({ type: 'industry' }),
+      AKTOOLS_PROVIDER.getSectorBoards({ type: 'concept' })
+    ]);
+    return [...industry.rows, ...concept.rows];
+  }
+  const { rows } = await AKTOOLS_PROVIDER.getSectorBoards({ type: type === 'concept' ? 'concept' : 'industry' });
+  return rows;
+};
+
+/**
+ * 全市场基金业绩排行默认分类。
+ *
+ * 为什么默认「股票型」而不是「全部」：上游无分页参数，一次必回整表 ——
+ * 全部 20689 行 / 7.8MB / 8.2s，股票型 1101 行 / 413KB / 0.7s（实测 2026-10-31）。
+ * 默认值决定「点开 tab 要等多久」，故选体量最小的主动权益分类。
+ */
+export const FUND_RANK_DEFAULT_SYMBOL = '股票型';
+
+/**
+ * 全市场基金业绩排行（AKTools → AKShare `fund_open_fund_rank_em`）。
+ *
+ * 与 fetchFundValuationRanking 的分工（两者互补，不重叠）：
+ *   - fetchFundValuationRanking：当日估值榜（估值涨幅/跌幅/实际涨幅/估值偏差），AKTools
+ *     fund_value_estimation_em 整表 + 本地排序分页，口径是「今天」；
+ *   - 本函数：中长期业绩榜（近1周~成立来 + 手续费），AKTools fund_open_fund_rank_em，
+ *     口径是「过去 N 个区间」，用来找基金而不是看今天谁涨了。
+ *
+ * 三层缓存（越靠前越便宜）：
+ *   1. AKTools Provider 内存缓存（TTL = AKTOOLS_CACHE_TTL.getFundRank，1h）
+ *   2. 本函数的天级缓存（IndexedDB，`aktools:fundRankOpen:{分类}`，24h）—— 刷新页面后仍然命
+ *   3. 上游整表（每次 ~0.3~8s，取决于分类）
+ *
+ * @param {{ symbol?: string, force?: boolean }} [options]
+ *   symbol: '全部' | '股票型' | '混合型' | '债券型' | '指数型' | 'QDII' | 'LOF' | 'FOF'
+ *   force:  true 时跳过天级缓存（用户主动刷新）
+ * @returns {Promise<{ symbol: string, rows: Array<object>, total: number, dataDate: string|null,
+ *                     source: string, fetchedAt: number, fromCache: boolean }>}
+ */
+export const fetchFundRankOpen = async ({ symbol = FUND_RANK_DEFAULT_SYMBOL, force = false } = {}) => {
+  const normalized = isString(symbol) && symbol.trim() ? symbol.trim() : FUND_RANK_DEFAULT_SYMBOL;
+
+  if (!force) {
+    const cached = getCachedFundRankOpen(normalized);
+    if (cached) {
+      return { ...cached, symbol: cached.symbol || normalized, fromCache: true };
+    }
+  }
+
+  const result = await AKTOOLS_PROVIDER.getFundRankOpen({ symbol: normalized });
+  writeCachedFundRankOpen(normalized, result);
+  return { ...result, fromCache: false };
 };
 
 /**

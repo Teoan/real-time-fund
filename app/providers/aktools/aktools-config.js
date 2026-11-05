@@ -142,6 +142,13 @@ export const AKTOOLS_ENDPOINTS = Object.freeze({
   //    分红数据改用 getFundDividendDetail（分红送配详情）
   getFundDividend: 'fund_fh_em',
   getFundRank: 'fund_open_fund_rank_em',
+  // 全市场盘中估值（东财估值表）：替代已下线的 api.fund.eastmoney.com/FundGuZhi/GetFundGZList
+  getFundValuationRank: 'fund_value_estimation_em',
+  // 板块行情（东财）：行业/概念板块名称 + 涨跌幅 + 领涨股，用于「热门板块」
+  getSectorBoardIndustry: 'stock_board_industry_name_em',
+  getSectorBoardConcept: 'stock_board_concept_name_em',
+  // 板块资金流（东财）：今日主力净流入，按板块名与上面的板块表合并
+  getSectorFundFlow: 'stock_sector_fund_flow_rank',
   getEtfSpot: 'fund_etf_spot_em',
   // 单股估值（用于持仓穿透）：AKShare stock_value_em，单只 A 股 6 位代码
   getStockFundamentals: 'stock_value_em',
@@ -184,6 +191,29 @@ export const AKTOOLS_HK_VALUATION_INDICATORS = Object.freeze({
 export const AKTOOLS_HK_VALUATION_PERIOD = '近五年';
 
 /**
+ * 全市场基金业绩排行（fund_open_fund_rank_em）支持的分类。
+ *
+ * ⚠️ AKShare 的 docstring 只列到「FOF」（漏写「LOF」），但源码 type_map 支持 LOF，
+ *    传「LOF」会返回与「全部」同构的表；这里按源码口径给出完整白名单，
+ *    非法值统一在 provider 层拦掉，避免把错误参数透传给上游。
+ *
+ * 实测（2026-10-31，自建 AKTools 实例 /api/public）响应体量与耗时：
+ *   全部 20689 行 / 7.76MB / 8.2s ；混合型 8614 / 3.23MB / 3.4s ；债券型 5068 / 1.85MB / 2.0s
+ *   指数型 4643 / 1.77MB / 2.0s ；股票型 1101 / 413KB / 0.7s ；FOF 1033 / 398KB / 0.7s ；QDII 225 / 85KB / 0.3s
+ * ⇒ 默认分类取「股票型」：一次拉全量只有 ~0.7s，且正好是「找主动权益基金」的主战场。
+ */
+export const AKTOOLS_FUND_RANK_SYMBOLS = Object.freeze([
+  '全部',
+  '股票型',
+  '混合型',
+  '债券型',
+  '指数型',
+  'QDII',
+  'LOF',
+  'FOF'
+]);
+
+/**
  * 缓存 TTL：与项目内现有查询粒度对齐。
  *  - 基础信息 1 天
  *  - 历史净值 1 天
@@ -209,6 +239,10 @@ export const AKTOOLS_CACHE_TTL = Object.freeze({
   getFundManager: ONE_DAY_MS,
   getFundDividend: ONE_DAY_MS,
   getFundRank: 60 * 60 * 1000,
+  // 盘中估值表：估值每几分钟就变，但整表 782 行 / 266KB / 3.6s，压到 1 分钟可接受
+  getFundValuationRank: 60 * 1000,
+  // 板块行情 + 资金流：东财板块数据分钟级刷新，5 分钟足够（单次 5~6s，不便宜）
+  getSectorBoard: 5 * 60 * 1000,
   getEtfSpot: 60 * 1000,
   getStockFundamentals: ONE_DAY_MS,
   // ROE 为季度财务指标，按天缓存即可（与单股估值同粒度）

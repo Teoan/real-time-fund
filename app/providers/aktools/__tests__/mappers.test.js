@@ -14,6 +14,14 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  mapFundRankRow,
+  mapFundRankRows,
+  mapFundValuationRow,
+  mapFundValuationRows,
+  mapSectorBoardRow,
+  mapSectorBoardRows,
+  mapSectorFundFlowRows,
+  mergeSectorNetInflow,
   mapHoldingRow,
   mapNavHistoryRow,
   mapOverviewRows,
@@ -466,5 +474,202 @@ describe('mapStockHkValueHistory', () => {
   it('空/非数组 → 空数组', () => {
     assert.deepEqual(mapStockHkValueHistory([], 'pe'), []);
     assert.deepEqual(mapStockHkValueHistory(null, 'pe'), []);
+  });
+});
+
+describe('mapFundRankRow', () => {
+  const fullRow = {
+    序号: 1,
+    基金代码: '002910',
+    基金简称: '易方达供给改革混合',
+    日期: '2026-10-30T00:00:00.000',
+    单位净值: 2.341,
+    累计净值: 2.341,
+    日增长率: -0.55,
+    近1周: 1.23,
+    近1月: 4.56,
+    近3月: 7.89,
+    近6月: '12.34',
+    近1年: 25.68,
+    近2年: 38.9,
+    近3年: 41.2,
+    今年来: 18.11,
+    成立来: 134.1,
+    自定义: null,
+    手续费: '0.15%'
+  };
+
+  it('18 列中文键 → 16 字段 domain model', () => {
+    const out = mapFundRankRow(fullRow);
+    assert.deepEqual(out, {
+      code: '002910',
+      name: '易方达供给改革混合',
+      date: '2026-10-30',
+      unitNav: 2.341,
+      accNav: 2.341,
+      dayReturn: -0.55,
+      week1: 1.23,
+      month1: 4.56,
+      month3: 7.89,
+      month6: 12.34,
+      year1: 25.68,
+      year2: 38.9,
+      year3: 41.2,
+      yearToDate: 18.11,
+      sinceInception: 134.1,
+      feeRate: 0.15,
+      sourceRank: 1
+    });
+  });
+
+  it('手续费 "0.15%" 去百分号后存百分数口径', () => {
+    assert.equal(mapFundRankRow({ 基金代码: '000001', 手续费: '1.50%' }).feeRate, 1.5);
+    assert.equal(mapFundRankRow({ 基金代码: '000001', 手续费: '--' }).feeRate, null);
+  });
+
+  it('次新基金的 近2年/近3年 NaN → null（不与 0 混淆）', () => {
+    const out = mapFundRankRow({ 基金代码: '020001', 近1年: 3.2, 近2年: 'NaN', 近3年: NaN });
+    assert.equal(out.year1, 3.2);
+    assert.equal(out.year2, null);
+    assert.equal(out.year3, null);
+  });
+
+  it('日期截到 YYYY-MM-DD', () => {
+    assert.equal(mapFundRankRow({ 基金代码: '000001', 日期: '2026-10-30T00:00:00.000' }).date, '2026-10-30');
+  });
+
+  it('缺基金代码 → null', () => {
+    assert.equal(mapFundRankRow(null), null);
+    assert.equal(mapFundRankRow({ 基金简称: '无代码' }), null);
+  });
+});
+
+describe('mapFundRankRows', () => {
+  it('整表映射并剔除无代码行', () => {
+    const out = mapFundRankRows([
+      { 基金代码: '000001', 近1年: 10 },
+      { 基金简称: '坏数据' },
+      { 基金代码: '000002', 近1年: -5 }
+    ]);
+    assert.equal(out.length, 2);
+    assert.equal(out[1].year1, -5);
+  });
+
+  it('空/非数组 → []', () => {
+    assert.deepEqual(mapFundRankRows(null), []);
+    assert.deepEqual(mapFundRankRows([]), []);
+  });
+});
+
+describe('mapFundValuationRow', () => {
+  const row = {
+    序号: 1,
+    基金代码: '000008',
+    基金名称: '嘉实中证500ETF联接A',
+    '2026-11-05-估算数据-估算值': '2.0124',
+    '2026-11-05-估算数据-估算增长率': '1.80%',
+    '2026-11-05-公布数据-单位净值': '2.0102',
+    '2026-11-05-公布数据-日增长率': '1.69%',
+    估算偏差: '0.11%',
+    '2026-11-04-单位净值': '1.9768'
+  };
+
+  it('日期前缀列 → 固定字段，百分比去 %', () => {
+    const out = mapFundValuationRow(row);
+    assert.equal(out.code, '000008');
+    assert.equal(out.name, '嘉实中证500ETF联接A');
+    assert.equal(out.date, '2026-11-05');
+    assert.equal(out.estChange, 1.8);
+    assert.equal(out.estValue, 2.0124);
+    assert.equal(out.nav, 2.0102);
+    assert.equal(out.navChange, 1.69);
+    assert.equal(out.deviation, 0.11);
+  });
+
+  it('上一日净值取 `YYYY-MM-DD-单位净值`，不能误取「公布数据-单位净值」', () => {
+    assert.equal(mapFundValuationRow(row).prevNav, 1.9768);
+  });
+
+  it('交易日切换（列名日期变化）仍然解析成功', () => {
+    const nextDay = {
+      基金代码: '000009',
+      '2026-11-06-估算数据-估算增长率': '-0.42%',
+      '2026-11-06-公布数据-日增长率': '--'
+    };
+    const out = mapFundValuationRow(nextDay);
+    assert.equal(out.date, '2026-11-06');
+    assert.equal(out.estChange, -0.42);
+    assert.equal(out.navChange, null);
+    assert.equal(out.prevNav, null);
+  });
+
+  it('缺基金代码 → null', () => {
+    assert.equal(mapFundValuationRow(null), null);
+    assert.equal(mapFundValuationRow({ 基金名称: '无代码' }), null);
+  });
+
+  it('整表映射并剔除坏行', () => {
+    const out = mapFundValuationRows([row, { 基金名称: '坏数据' }, { 基金代码: '000042' }]);
+    assert.equal(out.length, 2);
+    assert.deepEqual(mapFundValuationRows(null), []);
+  });
+});
+
+describe('mapSectorBoardRow', () => {
+  const row = {
+    排名: 1,
+    板块名称: '光伏辅材',
+    板块代码: 'BK1316',
+    最新价: 2306.99,
+    涨跌幅: 9.94,
+    换手率: 3.46,
+    上涨家数: 18,
+    下跌家数: 0,
+    领涨股票: '永臻股份',
+    '领涨股票-涨跌幅': 9.98
+  };
+
+  it('行业板块 → 项目字段', () => {
+    const out = mapSectorBoardRow(row, 'industry');
+    assert.equal(out.id, 'industry:BK1316');
+    assert.equal(out.sector_name, '光伏辅材');
+    assert.equal(out.sector_type, 'industry');
+    assert.equal(out.change_pct, 9.94);
+    assert.equal(out.net_inflow, null);
+    assert.equal(out.leader, '永臻股份');
+    assert.equal(out.leader_change, 9.98);
+  });
+
+  it('概念板块 type 透传', () => {
+    assert.equal(mapSectorBoardRow(row, 'concept').sector_type, 'concept');
+  });
+
+  it('缺板块名称 → null；整表剔除坏行', () => {
+    assert.equal(mapSectorBoardRow({ 板块代码: 'BK1' }), null);
+    assert.equal(mapSectorBoardRows([row, null], 'industry').length, 1);
+    assert.deepEqual(mapSectorBoardRows(null), []);
+  });
+});
+
+describe('mapSectorFundFlowRows / mergeSectorNetInflow', () => {
+  it('按名称取今日主力净流入', () => {
+    const map = mapSectorFundFlowRows([
+      { 序号: 1, 名称: '电力设备', '今日主力净流入-净额': 6310020864.0 },
+      { 序号: 2, 名称: '光伏辅材', '今日主力净流入-净额': '--' }
+    ]);
+    assert.equal(map['电力设备'], 6310020864.0);
+    assert.equal(map['光伏辅材'], null);
+    assert.deepEqual(mapSectorFundFlowRows(null), {});
+  });
+
+  it('合并后缺数据的板块 net_inflow 保持 null', () => {
+    const boards = [
+      { sector_name: '电力设备', change_pct: 3.79, net_inflow: null },
+      { sector_name: '未知板块', change_pct: 1.0, net_inflow: null }
+    ];
+    const merged = mergeSectorNetInflow(boards, { 电力设备: 123 });
+    assert.equal(merged[0].net_inflow, 123);
+    assert.equal(merged[1].net_inflow, null);
+    assert.deepEqual(mergeSectorNetInflow(null, {}), []);
   });
 });
