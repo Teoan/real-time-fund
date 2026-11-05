@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { isNumber } from 'lodash';
-import { tableFeatures, useTable, flexRender } from '@tanstack/react-table';
+import { columnVisibilityFeature, tableFeatures, useTable, flexRender } from '@tanstack/react-table';
 import { fetchFundValuationRanking, fetchFundPeriodReturns, fetchFundRankOpen, fetchHotSectors } from '../api/fund';
 import { cn } from '@/lib/utils';
 import { useStorageStore, useModalStore } from '../stores';
@@ -53,6 +53,13 @@ const RANK_SYMBOLS = ['股票型', '混合型', '指数型', '债券型', 'QDII'
 
 /** 业绩排行单页码数：与估值榜保持一致，本地分页（全量已在内存） */
 const RANK_PAGE_SIZE = 20;
+
+/**
+ * TanStack Table v9 是特性化 API：`row.getVisibleCells` 由 columnVisibilityFeature 提供，
+ * 空 features 下该方法根本不存在（运行时报 `row.getVisibleCells is not a function`）。
+ * 本项目这两个榜单没有列显隐开关，注册该特性只是为了保住「只渲染可见列」的既有语义。
+ */
+const MARKET_TABLE_FEATURES = tableFeatures({ columnVisibilityFeature });
 
 /** 估值榜单页码数（全量 782 行已在内存，本地分页） */
 const RANKING_PAGE_SIZE = 20;
@@ -388,7 +395,7 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
   const rankingTable = useTable({
     data: rankingData || [],
     columns: rankingTableColumns,
-    features: tableFeatures({})
+    features: MARKET_TABLE_FEATURES
   });
 
   /**
@@ -488,7 +495,7 @@ export default function MarketTab({ onAddFund, getFundCardProps, isActive }) {
   const rankTable = useTable({
     data: rankPageRows,
     columns: rankTableColumns,
-    features: tableFeatures({})
+    features: MARKET_TABLE_FEATURES
   });
 
   // 两个榜单共用同一套表格容器/样式：按 tab 切数据源、列与加载态

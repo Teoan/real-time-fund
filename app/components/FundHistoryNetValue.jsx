@@ -3,7 +3,7 @@ import { isArray } from 'lodash';
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { flexRender, tableFeatures, useTable } from '@tanstack/react-table';
+import { columnVisibilityFeature, flexRender, tableFeatures, useTable } from '@tanstack/react-table';
 import { fetchFundHistory } from '../api/fund';
 import * as qk from '../lib/query-keys';
 import FundHistoryNetValueModal from './FundHistoryNetValueModal';
@@ -99,7 +99,9 @@ export default function FundHistoryNetValue({ code, range = '1m', theme }) {
   const table = useTable({
     data,
     columns,
-    features: tableFeatures({})
+    // v9 是特性化 API：row.getVisibleCells 由 columnVisibilityFeature 提供，
+    // 空 features 下该方法不存在（运行时报 row.getVisibleCells is not a function）
+    features: tableFeatures({ columnVisibilityFeature })
   });
 
   const visibleRows = table.getRowModel().rows.slice(0, 5);

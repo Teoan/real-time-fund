@@ -3,7 +3,7 @@ import { isArray, isNumber } from 'lodash';
 import { useIsMobile } from '@/app/hooks/useIsMobile';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { flexRender, tableFeatures, useTable } from '@tanstack/react-table';
+import { columnVisibilityFeature, flexRender, tableFeatures, useTable } from '@tanstack/react-table';
 import { CloseIcon } from './Icons';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Drawer, DrawerClose, DrawerContent, DrawerHeader, DrawerTitle } from '@/components/ui/drawer';
@@ -91,7 +91,8 @@ export default function FundDailyEarningsDetailModal({
   const table = useTable({
     data,
     columns,
-    features: tableFeatures({})
+    // 同上：getVisibleCells 需要 columnVisibilityFeature
+    features: tableFeatures({ columnVisibilityFeature })
   });
 
   const rows = table.getRowModel().rows.slice(0, visibleCount);

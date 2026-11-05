@@ -4,7 +4,7 @@ import { useIsMobile } from '@/app/hooks/useIsMobile';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { flexRender, tableFeatures, useTable } from '@tanstack/react-table';
+import { columnVisibilityFeature, flexRender, tableFeatures, useTable } from '@tanstack/react-table';
 import { fetchFundHistory } from '../api/fund';
 import * as qk from '../lib/query-keys';
 import { CloseIcon } from './Icons';
@@ -106,7 +106,8 @@ export default function FundHistoryNetValueModal({ open, onOpenChange, code, the
   const table = useTable({
     data,
     columns,
-    features: tableFeatures({})
+    // 同上：getVisibleCells 需要 columnVisibilityFeature
+    features: tableFeatures({ columnVisibilityFeature })
   });
 
   const rows = table.getRowModel().rows.slice(0, visibleCount);
