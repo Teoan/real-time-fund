@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-47 app-specific React components (all client-side). Modals dominate (~26). Core display: FundCard, PcFundTable, MobileFundTable.
+90 app-specific React components (all client-side). Modals dominate (~26). Core display: FundCard, PcFundTable, MobileFundTable.
 
 ## STRUCTURE
 
@@ -54,7 +54,7 @@ app/components/
 - **Modals**: use `useBodyScrollLock(open)` hook for scroll prevention
 - **Icons**: mix of custom SVG (Icons.jsx) + lucide-react
 - **Styling**: glassmorphism via CSS variables (globals.css), no component-level CSS
-- **Nested dialog over 基金详情**: when adding a dialog opened *from inside* the fund detail, register its `modalStore` key in `isAnySubModalOpen` (PcFundTable / MarketTab `FundDetailDialog`) so the detail dialog isn't closed along with it; the mobile drawer already ignores pointer-down on `[data-slot="dialog-content"], [data-slot="dialog-overlay"]`
+- **Nested dialog over 基金详情**: when adding a dialog opened _from inside_ the fund detail, register its `modalStore` key in `isAnySubModalOpen` (PcFundTable / MarketTab `FundDetailDialog`) so the detail dialog isn't closed along with it; the mobile drawer already ignores pointer-down on `[data-slot="dialog-content"], [data-slot="dialog-overlay"]`
 - **Self-fetching enhancement panels**: `FundVolatilityPanel` / `FundMetricsPanel` / `FundValuationHistory` call their own hook (`useFundVolatility` / `useFundMetrics`) instead of receiving data through page.jsx props. Analytics panels inside FundCard drawer tabs need no `enabled` flag — Radix unmounts inactive `TabsContent`, so data loads only when the tab is opened
 
 ## ANTI-PATTERNS (THIS DIRECTORY)

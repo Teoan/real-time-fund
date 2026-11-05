@@ -599,7 +599,7 @@ export default function MyEarningsCalendarPage({ open, onOpenChange, series = []
                       mode="single"
                       month={cursorMonth.toDate()}
                       onMonthChange={(d) => setCursorMonth(dayjs(d).startOf('month'))}
-                      toMonth={new Date()}
+                      endMonth={new Date()}
                       showOutsideDays
                       hideNavigation
                       captionLayout="label"
@@ -616,10 +616,9 @@ export default function MyEarningsCalendarPage({ open, onOpenChange, series = []
                         root: 'w-full',
                         months: 'w-full',
                         month: 'w-full gap-2',
-                        month_grid: 'w-full',
+                        month_grid: 'w-full border-collapse table-fixed',
                         month_caption: 'hidden',
                         nav: 'hidden',
-                        table: 'w-full border-collapse table-fixed',
                         tbody: 'w-full',
                         weekdays: 'flex gap-[4px]',
                         weekday: 'flex-1 rounded-md text-[0.8rem] font-normal text-muted-foreground select-none',

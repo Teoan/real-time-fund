@@ -23,6 +23,7 @@ export default function ScanImportConfirmModal({
   currentGroup = 'all'
 }) {
   const [selectedGroupId, setSelectedGroupId] = useState(currentGroup);
+  const [expandAfterAdd, setExpandAfterAdd] = useState(true);
   const [autoDataSource, setAutoDataSource] = useState(false);
   const [autoImportTags, setAutoImportTags] = useState(true);
   const allCodeSet = useMemo(() => new Set((existingAllCodes || []).filter(Boolean)), [existingAllCodes]);

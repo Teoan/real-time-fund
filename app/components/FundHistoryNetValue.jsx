@@ -3,7 +3,7 @@ import { isArray } from 'lodash';
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table';
+import { flexRender, tableFeatures, useTable } from '@tanstack/react-table';
 import { fetchFundHistory } from '../api/fund';
 import * as qk from '../lib/query-keys';
 import FundHistoryNetValueModal from './FundHistoryNetValueModal';
@@ -96,10 +96,10 @@ export default function FundHistoryNetValue({ code, range = '1m', theme }) {
 
   const data = useMemo(() => buildRows(historyRaw || []), [historyRaw]);
 
-  const table = useReactTable({
+  const table = useTable({
     data,
     columns,
-    getCoreRowModel: getCoreRowModel()
+    features: tableFeatures({})
   });
 
   const visibleRows = table.getRowModel().rows.slice(0, 5);

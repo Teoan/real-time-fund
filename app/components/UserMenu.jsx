@@ -4,7 +4,7 @@ import { useIsMobile } from '@/app/hooks/useIsMobile';
 import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { AnimatePresence, motion } from 'framer-motion';
-import { HelpCircle } from 'lucide-react';
+import { HelpCircle, Search } from 'lucide-react';
 import { CalendarIcon, SettingsIcon, ListIcon } from './Icons';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 
@@ -16,7 +16,8 @@ export default function UserMenu({
   onOpenSettings,
   onOpenPortfolioEarnings,
   onTutorial,
-  onUpdateLog
+  onUpdateLog,
+  onOpenCommand
 }) {
   const isMobile = useIsMobile();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -74,6 +75,17 @@ export default function UserMenu({
                 </div>
               </div>
               <div className="user-menu-divider" />
+              <button
+                className="user-menu-item"
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  onOpenCommand?.();
+                }}
+              >
+                <Search width="16" height="16" />
+                <span>快速搜索</span>
+                <span style={{ marginLeft: 'auto', fontSize: 10, opacity: 0.6 }}>⌘K</span>
+              </button>
               <button
                 className="user-menu-item"
                 onClick={() => {

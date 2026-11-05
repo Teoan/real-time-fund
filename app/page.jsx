@@ -4255,6 +4255,7 @@ export default function HomePage() {
     handleAddFundsToGroup,
     handleDataSourceSelect,
     handleSyncLocalConfig,
+    handleCommandAddFund: (fund) => handleMarketTabAddFund?.(fund),
     handleSaveFundTags,
     handleAddPoolTag,
     handleDeleteGlobalTag,
@@ -4534,6 +4535,7 @@ export default function HomePage() {
                   }
                 }}
                 onUpdateLog={() => setUpdateLogOpen(true)}
+                onOpenCommand={() => _ms({ commandOpen: true })}
               />
             </div>
           </div>

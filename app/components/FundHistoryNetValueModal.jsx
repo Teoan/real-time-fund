@@ -4,7 +4,7 @@ import { useIsMobile } from '@/app/hooks/useIsMobile';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table';
+import { flexRender, tableFeatures, useTable } from '@tanstack/react-table';
 import { fetchFundHistory } from '../api/fund';
 import * as qk from '../lib/query-keys';
 import { CloseIcon } from './Icons';
@@ -103,10 +103,10 @@ export default function FundHistoryNetValueModal({ open, onOpenChange, code, the
 
   const data = useMemo(() => buildRows(historyRaw || []), [historyRaw]);
 
-  const table = useReactTable({
+  const table = useTable({
     data,
     columns,
-    getCoreRowModel: getCoreRowModel()
+    features: tableFeatures({})
   });
 
   const rows = table.getRowModel().rows.slice(0, visibleCount);

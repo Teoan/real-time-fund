@@ -16,7 +16,16 @@ import ReactDOM from 'react-dom';
 import { toast as sonnerToast } from 'sonner';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useModalStore } from '../stores';
-import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable } from '@tanstack/react-table';
+import {
+  columnOrderingFeature,
+  columnPinningFeature,
+  columnVisibilityFeature,
+  createPaginatedRowModel,
+  flexRender,
+  rowPaginationFeature,
+  tableFeatures,
+  useTable
+} from '@tanstack/react-table';
 import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { restrictToVerticalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
@@ -65,6 +74,14 @@ import { Input } from '@/components/ui/input';
 
 const EDIT_MOVE_TO_FRONT_COL = 'editMoveToFront';
 const EDIT_DRAG_COL = 'editDrag';
+
+const MOBILE_TABLE_FEATURES = tableFeatures({
+  columnOrderingFeature,
+  columnPinningFeature,
+  columnVisibilityFeature,
+  rowPaginationFeature,
+  paginatedRowModel: createPaginatedRowModel()
+});
 
 const MOBILE_TAGS_COLUMN_ID = 'tags';
 
@@ -2636,17 +2653,16 @@ const MobileFundTable = memo(function MobileFundTable({
     };
   }, [isEditMode, mobileColumnVisibility]);
 
-  const table = useReactTable({
+  const table = useTable({
     data,
     columns,
-    getCoreRowModel: getCoreRowModel(),
+    features: MOBILE_TABLE_FEATURES,
     state: {
       columnOrder: tableColumnOrder,
       columnVisibility: tableColumnVisibility,
       pagination
     },
     onPaginationChange: setPagination,
-    getPaginationRowModel: getPaginationRowModel(),
     onColumnOrderChange: (updater) => {
       if (isEditMode) return;
       const next = isFunction(updater) ? updater(['fundName', ...mobileColumnOrder]) : updater;
@@ -2667,7 +2683,8 @@ const MobileFundTable = memo(function MobileFundTable({
     },
     initialState: {
       columnPinning: {
-        left: ['fundName']
+        start: ['fundName'],
+        end: []
       }
     },
     defaultColumn: {
@@ -3051,8 +3068,8 @@ const MobileFundTable = memo(function MobileFundTable({
                 每页
               </span>
               <Input
-                key={table.getState().pagination.pageSize}
-                defaultValue={table.getState().pagination.pageSize}
+                key={table.state.pagination.pageSize}
+                defaultValue={table.state.pagination.pageSize}
                 type="number"
                 min={1}
                 className="w-[60px] h-8 text-[16PX] text-center px-2"
@@ -3060,7 +3077,7 @@ const MobileFundTable = memo(function MobileFundTable({
                   let val = parseInt(e.target.value, 10);
                   if (isNaN(val) || val < 1) val = 20;
                   e.target.value = val;
-                  if (val !== table.getState().pagination.pageSize) {
+                  if (val !== table.state.pagination.pageSize) {
                     table.setPageSize(val);
                     if (typeof window !== 'undefined') {
                       storageStore.setItem('fundTablePageSize', val);
@@ -3097,7 +3114,7 @@ const MobileFundTable = memo(function MobileFundTable({
                     />
                   </PaginationItem>
                   {Array.from({ length: table.getPageCount() }, (_, i) => {
-                    const pageIndex = table.getState().pagination.pageIndex;
+                    const pageIndex = table.state.pagination.pageIndex;
                     if (i === 0 || i === table.getPageCount() - 1 || (i >= pageIndex - 1 && i <= pageIndex + 1)) {
                       return (
                         <PaginationItem key={i}>
