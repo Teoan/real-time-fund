@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "test": "node --test \"app/**/__tests__/*.test.js\"",
     "prepare": "husky"
   },
   "dependencies": {
