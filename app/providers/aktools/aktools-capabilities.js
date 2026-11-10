@@ -10,6 +10,9 @@
  *   getFundPortfolioChange、getStockFundamentals、getStockRoe、getStockHkFinancial、
  *   getStockHkValueHistory、getStockUsFinancial；
  * 明确不可用（联调 500 / 超时，保持关闭）：getFundAnnouncement（公告类 3 个接口全 500）、getEtfSpot（15s 超时）。
+ * 市场资讯联调通过（2026-11-10 12:07，9/9 全 200）：getMarketFlashCls、getMarketFlashEm、
+ *   getMarketFlashSina、getMarketFlashThs、getMarketFlashFutu、getFinanceBreakfast、
+ *   getCaixinHighlights、getCctvNews —— 详见文件末尾的实测数据与 scripts/aktools-probe.mjs。
  *
  * @typedef {object} AktoolsProviderCapabilities
  * @property {boolean} searchFund          - 基金搜索
@@ -38,6 +41,14 @@
  * @property {boolean} getStockHkFinancial - 港股个股财务指标快照（含股东权益回报率 ROE），用于港股持仓穿透
  * @property {boolean} getStockHkValueHistory - 港股个股估值历史序列（市盈率/市净率），用于港股持仓历史分位
  * @property {boolean} getStockUsFinancial - 美股个股财务指标（ROE/盈利增速/营收增速/毛利率），用于美股持仓穿透
+ * @property {boolean} getMarketFlashCls    - 财联社电报（stock_info_global_cls，symbol=全部/重点）
+ * @property {boolean} getMarketFlashEm     - 东财全球财经快讯（stock_info_global_em，200 条）
+ * @property {boolean} getMarketFlashSina   - 新浪财经 7x24 快讯（stock_info_global_sina，20 条）
+ * @property {boolean} getMarketFlashThs    - 同花顺全球财经直播（stock_info_global_ths，20 条）
+ * @property {boolean} getMarketFlashFutu   - 富途牛牛快讯（stock_info_global_futu，50 条）
+ * @property {boolean} getFinanceBreakfast  - 东财财经早餐（stock_info_cjzc_em，全部历史）
+ * @property {boolean} getCaixinHighlights  - 财新数据通精选（stock_news_main_cx，100 条）
+ * @property {boolean} getCctvNews          - 新闻联播文字稿（news_cctv，按日期取单日）
  */
 
 const DEFAULT_CAPABILITIES = {
@@ -115,7 +126,33 @@ const DEFAULT_CAPABILITIES = {
   // 联调通过（2026-09-26）：stock_financial_us_analysis_indicator_em 200 / 7~38KB / ~0.5s，
   // 返回按报告期排列的财务指标，取最新一期的 ROE_AVG / 净利同比 / 营收同比 / 毛利率。
   // 是美股持仓 ROE 与成长性指标的唯一来源（东财 push2 无 ROE，且 f185 对美股恒为 0）。
-  getStockUsFinancial: true
+  getStockUsFinancial: true,
+  // ===== 市场资讯（快讯页）=====
+  // 联调通过（2026-11-10 12:07，9/9 全 200，样本为真实资讯流）：
+  //   cls 全部 12.6KB/217ms/20 行 · cls 重点 2.7KB/191ms/3 行 · em 113KB/240ms/200 行
+  //   sina 13.5KB/215ms/20 行 · ths 13.1KB/1877ms/20 行 · futu 25.9KB/258ms/50 行
+  //   cjzc 178.5KB/530ms/400 期 · caixin 23.9KB/529ms/100 行 · cctv 22KB/1.7s（当日 19:00 后才有）
+  // 说明：
+  //   - 同花顺是唯一接近 2s 的源，5 源并发时整页耗时由它决定；
+  //   - 单源失败仍由业务层按源降级（见 app/api/fund.js 的 fetchMarketFlash），
+  //     任一接口日后挂掉，把对应开关改回 false 即可，UI 会自动隐藏该源。
+  //
+  // 财联社电报：symbol=全部 / 重点，单次 20 条，无外链。已知上游抖动（AKShare #5732）。
+  getMarketFlashCls: true,
+  // 东财全球财经快讯：单次 200 条，字段最全（标题/摘要/时间/链接）。
+  getMarketFlashEm: true,
+  // 新浪 7x24：单次 20 条，只有时间+内容，标题由内容派生。
+  getMarketFlashSina: true,
+  // 同花顺全球财经直播：单次 20 条（实测最慢，~1.9s）。
+  getMarketFlashThs: true,
+  // 富途牛牛快讯：单次 50 条。
+  getMarketFlashFutu: true,
+  // 东财财经早餐：单次返回**全部历史 400 期**（实测，非 343），业务层裁到 50 期才给 UI。
+  getFinanceBreakfast: true,
+  // 财新数据通最新 100 条：无时间字段，按上游顺序展示。
+  getCaixinHighlights: true,
+  // 新闻联播文字稿：按日期取单日，2016-03-30 至今。
+  getCctvNews: true
 };
 
 export const AKTOOLS_CAPABILITIES = Object.freeze({ ...DEFAULT_CAPABILITIES });

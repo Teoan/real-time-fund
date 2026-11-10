@@ -10,7 +10,8 @@ import { createManualQueryCache } from '../lib/manualQueryCache';
 import * as qk from '../lib/query-keys';
 import { isSupabaseConfigured, supabase, canUseSupabaseBusiness, tripSupabaseCircuit } from '../lib/supabase';
 import { isTradingDay } from '../lib/tradingCalendar';
-import { AKTOOLS_PROVIDER } from '@/app/providers/aktools';
+import { AKTOOLS_PROVIDER, AKTOOLS_NEWS_SOURCES, AKTOOLS_NEWS_IMPORTANT_VIEW } from '@/app/providers/aktools';
+import { mergeMarketFlash, filterBySource, resolveFlashSources } from '../lib/newsFeed';
 import {
   getCachedFundRankOpen,
   getCachedStockFundamental,
@@ -4553,4 +4554,186 @@ export const fetchFundPortfolioChange = async (fundCode, side = 'buy') => {
   if (!c) return null;
   const indicator = side === 'sell' ? '累计卖出' : '累计买入';
   return fetchFundProfile('getFundPortfolioChange', () => AKTOOLS_PROVIDER.getFundPortfolioChange(c, side));
+};
+
+// ============================================================================
+// 市场快讯（快讯页）
+//
+// 设计要点：
+//   1. **单源失败不抛**：5 个源经由 Promise.allSettled 汇总，失败源进 failed 列表，
+//      UI 只把那一源置灰，页面其余部分照常。资讯是「有则更好」的数据，不该让整页挂掉。
+//   2. 全部失败才让页面进整体降级态（failed.length === sources.length）。
+//   3. 合并去重不在这里实现，交给 app/lib/newsFeed.js（纯函数、有单测）。
+//   4. 不落盘：资讯时效性极强，写 localStorage 只会留下一堆过期条目；靠内存缓存即可。
+// ============================================================================
+
+/** 「全部」视图默认的源集合（顺序即去重优先级，见 AKTOOLS_NEWS_SOURCES.priority） */
+const MARKET_FLASH_SOURCE_IDS = AKTOOLS_NEWS_SOURCES.map((s) => s.id);
+
+/** 快讯条目上限（与 newsFeed 的默认值保持一致） */
+const MARKET_FLASH_LIMIT = 300;
+
+/** 统一把异常转成一句可展示的短文案（避免把整段堆栈塞进 UI） */
+const errorText = (e) => {
+  const message = e && e.message ? String(e.message) : String(e || '未知错误');
+  return message.length > 120 ? `${message.slice(0, 120)}…` : message;
+};
+
+/** 'YYYY-MM-DD' / 'YYYYMMDD' / Date → 'YYYY-MM-DD'；非法返回 null */
+const normalizeNewsDateInput = (raw) => {
+  if (raw instanceof Date) {
+    if (!Number.isFinite(raw.getTime())) return null;
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${raw.getFullYear()}-${pad(raw.getMonth() + 1)}-${pad(raw.getDate())}`;
+  }
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  if (/^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return null;
+};
+
+/**
+ * 取单个源的快讯。
+ * @param {string} sourceId
+ * @param {{ force?: boolean }} [options]
+ * @returns {Promise<Array<object>>}
+ */
+const fetchFlashBySource = (sourceId, { force = false } = {}) => {
+  switch (sourceId) {
+    case 'cls':
+      return AKTOOLS_PROVIDER.getMarketFlashCls({ force });
+    case 'em':
+      return AKTOOLS_PROVIDER.getMarketFlashEm({ force });
+    case 'sina':
+      return AKTOOLS_PROVIDER.getMarketFlashSina({ force });
+    case 'ths':
+      return AKTOOLS_PROVIDER.getMarketFlashThs({ force });
+    case 'futu':
+      return AKTOOLS_PROVIDER.getMarketFlashFutu({ force });
+    default:
+      return Promise.resolve([]);
+  }
+};
+
+/**
+ * 市场快讯（多源合并）。
+ *
+ * @param {{ sources?: string[]|'all'|'important', force?: boolean }} [options]
+ *   sources: 'all'（默认，5 源合并）/ 'important'（财联社·重点电报）/ 具体源 id 数组
+ * @returns {Promise<{
+ *   items: Array<object>,          // 已去重、按时间倒序、截断后的条目
+ *   failed: Array<{source: string, sourceLabel: string, reason: string}>,
+ *   removed: number,               // 被去重掉的条数
+ *   total: number,                 // items.length
+ *   allFailed: boolean,            // 全部源都失败（UI 进整体降级态）
+ *   fetchedAt: number
+ * }>}
+ */
+export const fetchMarketFlash = async ({ sources = 'all', force = false } = {}) => {
+  const isImportantView = sources === 'important';
+
+  // 重点电报：与 cls 同端点不同 symbol，单源直取，无需合并
+  if (isImportantView) {
+    const fetchedAt = Date.now();
+    try {
+      const items = await AKTOOLS_PROVIDER.getMarketFlashCls({ important: true, force });
+      const filtered = filterBySource(items, AKTOOLS_NEWS_IMPORTANT_VIEW.source);
+      return { items: filtered, failed: [], removed: 0, total: filtered.length, allFailed: false, fetchedAt };
+    } catch (e) {
+      const source = AKTOOLS_NEWS_IMPORTANT_VIEW.source;
+      return {
+        items: [],
+        failed: [{ source, sourceLabel: AKTOOLS_NEWS_IMPORTANT_VIEW.label, reason: errorText(e) }],
+        removed: 0,
+        total: 0,
+        allFailed: true,
+        fetchedAt
+      };
+    }
+  }
+
+  const sourceIds = resolveFlashSources(sources, MARKET_FLASH_SOURCE_IDS);
+
+  const settled = await Promise.allSettled(
+    sourceIds.map(async (sourceId) => ({ sourceId, items: await fetchFlashBySource(sourceId, { force }) }))
+  );
+
+  const collected = [];
+  const failed = [];
+  for (let i = 0; i < settled.length; i += 1) {
+    const outcome = settled[i];
+    const sourceId = sourceIds[i];
+    if (outcome.status === 'fulfilled') {
+      collected.push(...outcome.value.items);
+    } else {
+      const meta = AKTOOLS_NEWS_SOURCES.find((s) => s.id === sourceId);
+      failed.push({
+        source: sourceId,
+        sourceLabel: meta?.label || sourceId,
+        reason: errorText(outcome.reason)
+      });
+    }
+  }
+
+  const merged = mergeMarketFlash(collected, { limit: MARKET_FLASH_LIMIT });
+  return {
+    items: merged.items,
+    failed,
+    removed: merged.removed,
+    total: merged.total,
+    allFailed: sourceIds.length > 0 && failed.length === sourceIds.length,
+    fetchedAt: Date.now()
+  };
+};
+
+/**
+ * 财经早餐（stock_info_cjzc_em）。
+ *
+ * 上游单次返回**全部历史**（实测约 343 期），业务层裁剪到最新 limit 期后再交给 UI：
+ * 一次渲染 343 条既是无谓的 DOM 开销，也没有人往回翻那么远。
+ *
+ * @param {{ force?: boolean, limit?: number }} [options]
+ * @returns {Promise<{ items: Array<object>, total: number, fetchedAt: number }|null>}
+ */
+export const fetchFinanceBreakfast = async ({ force = false, limit = 50 } = {}) => {
+  try {
+    const all = await AKTOOLS_PROVIDER.getFinanceBreakfast({ force });
+    const safeLimit = isNumber(limit) && limit > 0 ? Math.floor(limit) : 50;
+    return { items: all.slice(0, safeLimit), total: all.length, fetchedAt: Date.now() };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * 财新数据通精选（stock_news_main_cx）。无时间字段，保持上游顺序。
+ * @param {{ force?: boolean }} [options]
+ * @returns {Promise<{ items: Array<object>, total: number, fetchedAt: number }|null>}
+ */
+export const fetchCaixinHighlights = async ({ force = false } = {}) => {
+  try {
+    const items = await AKTOOLS_PROVIDER.getCaixinHighlights({ force });
+    return { items, total: items.length, fetchedAt: Date.now() };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * 新闻联播文字稿（news_cctv）：按日期取单日。
+ *
+ * @param {string} date 'YYYY-MM-DD' 或 'YYYYMMDD'
+ * @param {{ force?: boolean }} [options]
+ * @returns {Promise<{ items: Array<object>, date: string, total: number, fetchedAt: number }|null>}
+ */
+export const fetchCctvNews = async (date, { force = false } = {}) => {
+  const normalized = normalizeNewsDateInput(date);
+  if (!normalized) return null;
+  try {
+    const items = await AKTOOLS_PROVIDER.getCctvNews(normalized, { force });
+    return { items, date: normalized, total: items.length, fetchedAt: Date.now() };
+  } catch {
+    return null;
+  }
 };

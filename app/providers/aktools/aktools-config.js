@@ -162,6 +162,23 @@ export const AKTOOLS_ENDPOINTS = Object.freeze({
   // 美股个股财务指标（用于持仓穿透 ROE/盈利增速/营收增速）：AKShare stock_financial_us_analysis_indicator_em
   // 注意：该接口只接受 symbol，附加 indicator/period 等参数会返回 500
   getStockUsFinancial: 'stock_financial_us_analysis_indicator_em',
+  // ===== 市场资讯（快讯页）=====
+  // 财联社电报：symbol=全部 / 重点，单次 20 条，**无外链字段**，日期与时间分两列
+  getMarketFlashCls: 'stock_info_global_cls',
+  // 东财全球财经快讯：单次 200 条，标题/摘要/发布时间/链接
+  getMarketFlashEm: 'stock_info_global_em',
+  // 新浪财经 7x24：单次 20 条，只有「时间/内容」，**标题需从内容派生**
+  getMarketFlashSina: 'stock_info_global_sina',
+  // 同花顺全球财经直播：单次 20 条，标题/内容/发布时间/链接
+  getMarketFlashThs: 'stock_info_global_ths',
+  // 富途牛牛快讯：单次 50 条，标题/内容/发布时间/链接
+  getMarketFlashFutu: 'stock_info_global_futu',
+  // 东财财经早餐：单次返回**全部历史**（约 343 期），标题/摘要/发布时间/链接
+  getFinanceBreakfast: 'stock_info_cjzc_em',
+  // 财新数据通最新：单次 100 条，只有 tag/summary/url，**没有时间字段**
+  getCaixinHighlights: 'stock_news_main_cx',
+  // 新闻联播文字稿：按 date（YYYYMMDD）取单日，date/title/content
+  getCctvNews: 'news_cctv',
   healthCheck: 'fund_open_fund_daily_em'
 });
 
@@ -214,6 +231,86 @@ export const AKTOOLS_FUND_RANK_SYMBOLS = Object.freeze([
 ]);
 
 /**
+ * 资讯源显示名（单一来源）。
+ *
+ * mapper 用它填归一化条目的 sourceLabel，UI 用它渲染徽标 —— 两处必须一致，
+ * 所以只在这里定义一次。前 5 个是快讯流（可合并去重），后 3 个是独立长文栏目。
+ */
+export const AKTOOLS_NEWS_LABELS = Object.freeze({
+  cls: '财联社',
+  em: '东财',
+  sina: '新浪',
+  ths: '同花顺',
+  futu: '富途',
+  cjzc: '财经早餐',
+  caixin: '财新',
+  cctv: '新闻联播'
+});
+
+/**
+ * 市场快讯的源清单。
+ *
+ * 这是「快讯页源筛选 chips」与 Provider 方法的唯一映射表：
+ *   id       → 领域内的源标识（同时是归一化条目的 source 字段）
+ *   label    → UI 徽标文案
+ *   method   → Provider 方法名（akTools-provider.js）
+ *   ttlKey   → AKTOOLS_CACHE_TTL 的键
+ *
+ * ⚠️ 这里的 5 个源内容高度重复（同一条通稿常同时出现在新浪/同花顺/富途），
+ *    「全部」视图必须先合并去重再排序，规则见 app/lib/newsFeed.js。
+ */
+export const AKTOOLS_NEWS_SOURCES = Object.freeze([
+  {
+    id: 'cls',
+    label: AKTOOLS_NEWS_LABELS.cls,
+    method: 'getMarketFlashCls',
+    ttlKey: 'getMarketFlashCls',
+    priority: 0
+  },
+  {
+    id: 'em',
+    label: AKTOOLS_NEWS_LABELS.em,
+    method: 'getMarketFlashEm',
+    ttlKey: 'getMarketFlashEm',
+    priority: 1
+  },
+  {
+    id: 'ths',
+    label: AKTOOLS_NEWS_LABELS.ths,
+    method: 'getMarketFlashThs',
+    ttlKey: 'getMarketFlashThs',
+    priority: 2
+  },
+  {
+    id: 'sina',
+    label: AKTOOLS_NEWS_LABELS.sina,
+    method: 'getMarketFlashSina',
+    ttlKey: 'getMarketFlashSina',
+    priority: 3
+  },
+  {
+    id: 'futu',
+    label: AKTOOLS_NEWS_LABELS.futu,
+    method: 'getMarketFlashFutu',
+    ttlKey: 'getMarketFlashFutu',
+    priority: 4
+  }
+]);
+
+/**
+ * 「重点电报」视图：与 cls 同一端点，仅 symbol 不同。
+ *
+ * 单次仍只回 20 条，体量可忽略，但它与「财联社」列表内容不同（上游做了重要性筛选），
+ * 所以 UI 上作为独立 chip 而不是一个「只看重点」开关 —— 开关语义会让人以为是在全量里筛。
+ */
+export const AKTOOLS_NEWS_IMPORTANT_VIEW = Object.freeze({
+  id: 'important',
+  label: '重点电报',
+  source: 'cls',
+  symbol: '重点'
+});
+
+/**
  * 缓存 TTL：与项目内现有查询粒度对齐。
  *  - 基础信息 1 天
  *  - 历史净值 1 天
@@ -252,6 +349,17 @@ export const AKTOOLS_CACHE_TTL = Object.freeze({
   getStockHkValueHistory: ONE_DAY_MS,
   // 美股财务指标（季度/年度披露，单次 7~38KB）按天缓存
   getStockUsFinancial: ONE_DAY_MS,
+  // 快讯：上游分钟级刷新，AKTools 自身也有 60s 结果缓存，这里取同粒度即可。
+  // 再往下压没有意义（会被 AKTools 的 60s 缓存吃掉），再往上放会让「快讯」变「旧闻」。
+  getMarketFlashCls: 60 * 1000,
+  getMarketFlashEm: 60 * 1000,
+  getMarketFlashSina: 60 * 1000,
+  getMarketFlashThs: 60 * 1000,
+  getMarketFlashFutu: 60 * 1000,
+  // 财经早餐一期/日、财新精选小时级、联播为日更历史（可复看过去日期）
+  getFinanceBreakfast: 6 * 60 * 60 * 1000,
+  getCaixinHighlights: 60 * 60 * 1000,
+  getCctvNews: ONE_DAY_MS,
   healthCheck: 5 * 60 * 1000
 });
 

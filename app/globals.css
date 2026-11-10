@@ -4735,7 +4735,16 @@ html::-webkit-scrollbar-thumb:active,
     0 4px 12px rgba(0, 0, 0, 0.2);
 
   width: 68px;
-  height: 134px;
+  /*
+   * 高度按 tab 数量算，别写死。
+   *
+   * 原值是 height: 134px —— 恰好只容得下 2 项（64×2 + 间距 2 + padding 4 + border 2），
+   * 配上 overflow: hidden 之后，第 3 个 tab 会被直接裁掉：DOM 里存在、界面上看不见。
+   * 新增「快讯」时正是踩了这个坑（PC 侧栏只剩首页/行情两项）。
+   * 66n + 4 即每项 64px + 项间 2px + 上下 padding/border 4px；
+   * 折叠态仍由 .pc-side-nav-container.collapsed 的 height: 64px 覆盖，动画照旧。
+   */
+  height: calc(var(--pc-side-nav-count, 2) * 66px + 4px);
   overflow: hidden;
   transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -5242,5 +5251,677 @@ html::-webkit-scrollbar-thumb:active,
   [data-theme='light'] .trend-tooltip-desktop {
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.2)) !important;
     backdrop-filter: blur(2px) !important;
+  }
+}
+
+/* ==========================================================================
+   市场快讯页（NewsTab）
+   - 与行情页同一套视觉语言：玻璃拟态卡片 + CSS 变量，不引入新的色板
+   - 沿用 .theme 的默认（深色）为基准，亮色在 [data-theme='light'] 里覆盖
+   - 注意 16PX：日期输入框必须是 16px，否则 iOS Safari 聚焦时会自动放大页面
+   ========================================================================== */
+
+.news-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /*
+   * 阅读宽度上限。
+   *
+   * 不设限时 1440 屏下一行能排到 1000px 以上（约 70+ 汉字），眼睛回行会明显掉行；
+   * 860px 对应约 55 个汉字/行，接近长文阅读的舒适区间，同时给「精选」两列留够空间。
+   * 用 margin-inline:auto 居中，窄屏自然退化为满宽。
+   */
+  width: 100%;
+  max-width: 760px;
+  margin-inline: auto;
+  padding-bottom: calc(var(--mobile-bottom-nav-height, 60px) + 20px);
+}
+
+.news-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.news-header-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.news-page-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+
+.news-page-sub {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.news-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.news-updated {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.news-auto-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+}
+
+.news-auto-chip {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease;
+}
+
+.news-auto-chip.is-active {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.news-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease;
+}
+
+.news-refresh-btn:hover:not(:disabled) {
+  color: var(--primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.news-refresh-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.news-spin {
+  animation: news-spin 1s linear infinite;
+}
+
+@keyframes news-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.news-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  width: fit-content;
+}
+
+.news-tab {
+  height: 26px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease;
+}
+
+.news-tab[data-state='on'] {
+  background: var(--card);
+  color: var(--foreground);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.news-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.news-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.news-chip {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.news-chip:hover {
+  color: var(--foreground);
+  border-color: var(--muted);
+}
+
+.news-chip.is-active {
+  background: rgba(34, 211, 238, 0.14);
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.news-count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding-left: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.news-alert {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #f59e0b;
+  font-size: 12px;
+}
+
+.news-alert-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.news-alert-retry {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ---- 快讯列表（阅读优先版式） ----
+ *
+ * 设计取舍：
+ *   1. 取消「左侧 44px 时间轴 + 竖线」——中文正文在窄列里被挤成碎行，且竖线在长列表里是纯噪音；
+ *      时间改到条目首行的元信息，既省行宽又更符合扫读习惯（先看时间、再看标题、最后读正文）。
+ *   2. 每条之间用一条极淡的分隔线，而不是给每条套卡片：卡片边框会把视线切成一段一段。
+ *   3. 字号层级拉开：标题 15/600、正文 14/1.8、元信息 12，正文行高取 1.8（中文密排需要更多行距）。
+ *   4. 按自然日分组 + 日期分隔线，几百条的长列表才能保留时间锚点。
+ */
+
+.news-feed {
+  display: flex;
+  flex-direction: column;
+}
+
+.news-group + .news-group {
+  margin-top: 8px;
+}
+
+.news-date-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0 4px;
+}
+
+.news-date-divider::before,
+.news-date-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  opacity: 0.7;
+}
+
+.news-date-label {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.news-group:first-child .news-date-divider {
+  margin-top: 2px;
+}
+
+.news-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 2px;
+}
+
+.news-item + .news-item {
+  border-top: 1px solid var(--border);
+}
+
+/* 元信息行：时间 · 来源 · 重要 · 相对时间 · 原文 */
+.news-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.news-item-clock {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+.news-source {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.news-important {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(34, 211, 238, 0.14);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.7;
+}
+
+/* 相对时间紧跟来源（同一信息簇），只有「原文」贴到行尾，避免中间出现大片空白 */
+.news-item-relative {
+  font-variant-numeric: tabular-nums;
+}
+
+.news-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.news-link:hover {
+  color: var(--primary);
+}
+
+.news-item-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.55;
+  color: var(--foreground);
+  text-wrap: pretty;
+}
+
+.news-item-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text);
+  /* 略降一档亮度：正文与标题同亮度时，扫描时无法一眼分出「哪句是标题」 */
+  opacity: 0.88;
+  word-break: break-word;
+  text-wrap: pretty;
+}
+
+.news-item-text.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.news-item.is-important .news-item-title {
+  color: var(--foreground);
+}
+
+.news-expand {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.news-expand--block {
+  align-self: center;
+  margin-top: 8px;
+}
+
+/* 骨架屏沿用 .news-item 的间距，避免加载完成时高度跳变 */
+.news-feed--loading .news-item {
+  gap: 8px;
+}
+
+/* ---- 精选 ---- */
+
+.news-pick-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.news-pick-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.news-pick-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.news-pick-icon {
+  display: inline-flex;
+  color: var(--primary);
+}
+
+.news-pick-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.news-pick-hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.news-pick-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.news-pick-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.news-pick-item:last-child {
+  border-bottom: none;
+}
+
+/* 链接用行内流（不是 flex）：flex 会把箭头排到「行中间」，
+   长标题换行时视觉上像是悬在文字外面 */
+.news-pick-link {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  text-decoration: none;
+  text-wrap: pretty;
+}
+
+.news-pick-link:hover {
+  color: var(--primary);
+}
+
+.news-pick-ext {
+  display: inline;
+  margin-left: 3px;
+  vertical-align: -1px;
+  opacity: 0.55;
+}
+
+/* 财新分类标签：放在标题下方作为元信息，而不是与正文混排 */
+.news-tag {
+  align-self: flex-start;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.news-pick-meta {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.news-pick-empty {
+  margin: 0;
+  padding: 12px 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ---- 联播 ---- */
+
+.news-cctv-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.news-cctv-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.news-cctv-nav:hover:not(:disabled) {
+  color: var(--primary);
+}
+
+.news-cctv-nav:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 16PX：大写 PX 跳过 postcss-pxtorem，保证 iOS Safari 聚焦不放大 */
+.news-cctv-date {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: 16px;
+}
+
+.news-cctv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.news-article {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.news-article-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.55;
+  color: var(--foreground);
+}
+
+.news-article-body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--text);
+  white-space: pre-wrap;
+  text-wrap: pretty;
+}
+
+.news-empty {
+  min-height: 200px;
+  border: 1px dashed var(--border);
+}
+
+/* ---- 亮色主题微调 ---- */
+
+[data-theme='light'] .news-auto-refresh,
+[data-theme='light'] .news-tabs {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+[data-theme='light'] .news-auto-chip.is-active,
+[data-theme='light'] .news-tab[data-state='on'] {
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
+[data-theme='light'] .news-chip.is-active {
+  background: rgba(8, 145, 178, 0.1);
+}
+
+[data-theme='light'] .news-refresh-btn:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+/* ---- 移动端 ---- */
+
+@media (max-width: 640px) {
+  .news-page {
+    gap: 12px;
+  }
+
+  .news-header {
+    align-items: flex-start;
+  }
+
+  .news-page-sub {
+    display: none;
+  }
+
+  .news-page-title {
+    font-size: 16px;
+  }
+
+  .news-pick-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /*
+   * 移动端不再压字号：原先 13/12px 是为「时间轴窄列」让位，现在时间移到元信息行，
+   * 正文有足足一整行宽度，14px 反而比压低字号更好读（也避免 iOS 上看起来发虚）。
+   */
+  .news-item {
+    padding: 12px 2px;
+    gap: 5px;
+  }
+
+  /* 移动端根字号 ≈15px，这里写 18/16px 会落到 1.125rem / 1rem，
+     实测约 16.9px / 15px —— 与主流资讯类 App 的正文尺寸一致；
+     直接写 14px 会被缩成 13.1px，长文读起来偏吃力。 */
+  .news-item-title {
+    font-size: 18px;
+  }
+
+  .news-item-text {
+    font-size: 16px;
+    line-height: 1.75;
+    -webkit-line-clamp: 5;
+  }
+
+  .news-item-meta {
+    font-size: 13px;
+  }
+
+  .news-item-relative {
+    display: none;
+  }
+
+  .news-count {
+    display: none;
   }
 }

@@ -51,6 +51,7 @@ import MobileFundTable from './components/MobileFundTable';
 import MobileBottomNav from './components/MobileBottomNav';
 import MineTab from './components/MineTab';
 import MarketTab from './components/MarketTab';
+import NewsTab from './components/NewsTab';
 import PcSideNav from './components/PcSideNav';
 import SearchFund from './components/SearchFund';
 import { useTheme } from './hooks/useTheme';
@@ -371,12 +372,20 @@ export default function HomePage() {
 
   const [mainTab, setMainTab] = useState('home');
   const [hasVisitedMarketTab, setHasVisitedMarketTab] = useState(false);
+  // 快讯页同样是首访懒加载：没人点进来就不挂载、不发任何资讯请求
+  const [hasVisitedNewsTab, setHasVisitedNewsTab] = useState(false);
 
   useEffect(() => {
     if (mainTab === 'market' && !hasVisitedMarketTab) {
       setHasVisitedMarketTab(true);
     }
   }, [mainTab, hasVisitedMarketTab]);
+
+  useEffect(() => {
+    if (mainTab === 'news' && !hasVisitedNewsTab) {
+      setHasVisitedNewsTab(true);
+    }
+  }, [mainTab, hasVisitedNewsTab]);
 
   const [mobileBottomNavHidden, setMobileBottomNavHidden] = useState(false);
   const lastScrollYRef = useRef(0);
@@ -4000,7 +4009,9 @@ export default function HomePage() {
     .join(' ');
 
   /** 移动端底部 Tab 切换时保留首页 DOM，用显隐代替卸载 */
-  const mobileHomeTabVisible = mainTab === 'home' || mainTab === 'market';
+  // 快讯页也挂在这一层里：它同样需要顶部 navbar（搜索/品牌），且切走时不能卸载，
+  // 否则每次来回切 tab 都会重新拉一遍资讯。
+  const mobileHomeTabVisible = mainTab === 'home' || mainTab === 'market' || mainTab === 'news';
 
   /** PC / 移动端行、FundCard 共用：统一 name / fundName 后走单删逻辑 */
   const handleRemoveFundEntry = useCallback(
@@ -5223,6 +5234,11 @@ export default function HomePage() {
                 getFundCardProps={getFundCardPropsForRow}
                 isActive={mainTab === 'market'}
               />
+            </div>
+          )}
+          {hasVisitedNewsTab && (
+            <div style={{ display: mainTab === 'news' ? 'contents' : 'none' }}>
+              <NewsTab isActive={mainTab === 'news'} />
             </div>
           )}
         </>

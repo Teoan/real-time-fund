@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { motion, LayoutGroup, useReducedMotion } from 'framer-motion';
-import { Home, TrendingUp, ChevronRight } from 'lucide-react';
+import { Home, TrendingUp, Newspaper, ChevronRight } from 'lucide-react';
 import { useIsMobile } from '../hooks/useIsMobile';
 
 const TABS = [
   { id: 'home', label: '首页', Icon: Home },
-  { id: 'market', label: '行情', Icon: TrendingUp }
+  { id: 'market', label: '行情', Icon: TrendingUp },
+  { id: 'news', label: '快讯', Icon: Newspaper }
 ];
 
 export default function PcSideNav({ value, onChange }) {
@@ -30,7 +31,14 @@ export default function PcSideNav({ value, onChange }) {
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <nav className="pc-side-nav" role="navigation" aria-label="侧边导航">
+      <nav
+        className="pc-side-nav"
+        role="navigation"
+        aria-label="侧边导航"
+        /* 高度由 tab 数量驱动（见 globals.css 里 .pc-side-nav 的 height 计算），
+           写死高度会让新增的第 3 个 tab 被 overflow: hidden 裁掉 */
+        style={{ '--pc-side-nav-count': TABS.length }}
+      >
         <div className="pc-side-nav-handle">
           <ChevronRight size={16} strokeWidth={2.5} color="var(--muted)" />
         </div>

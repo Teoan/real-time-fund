@@ -40,30 +40,31 @@ real-time-fund/
 
 ## WHERE TO LOOK
 
-| Task                     | Location                                                                | Notes                                                |
-| ------------------------ | ----------------------------------------------------------------------- | ---------------------------------------------------- |
-| Fund valuation logic     | `app/api/fund.js`                                                       | JSONP to 天天基金, script injection to 腾讯财经      |
-| Main UI orchestration    | `app/page.jsx`                                                          | Monolithic — all useState, business logic, rendering |
-| Modal rendering layer    | `app/components/ModalsLayer.jsx`                                        | All modal rendering extracted from page.jsx          |
-| Fund card display        | `app/components/FundCard.jsx`                                           | Individual fund card with holdings                   |
-| Desktop table            | `app/components/PcFundTable.jsx`                                        | PC-specific table layout                             |
-| Mobile table             | `app/components/MobileFundTable.jsx`                                    | Mobile-specific layout, swipe actions                |
-| Holding calculations     | `app/page.jsx` (getHoldingProfit)                                       | Profit/loss computation                              |
-| Cloud sync               | `app/lib/supabase.js` + page.jsx sync functions                         | Supabase auth + data sync                            |
-| Trading/DCA              | `app/components/TradeModal.jsx`, `DcaModal.jsx`                         | Buy/sell, dollar-cost averaging                      |
-| Fund fuzzy search        | `app/hooks/useFundFuzzyMatcher.js`                                      | Fuse.js based name/code matching                     |
-| OCR import               | `app/page.jsx` (processFiles)                                           | Tesseract.js + LLM parsing                           |
-| Valuation intraday chart | `app/lib/valuationTimeseries.js`                                        | localStorage time-series                             |
-| Trading calendar         | `app/lib/tradingCalendar.js`                                            | Chinese holiday detection via CDN                    |
-| Request caching          | TanStack Query (`app/lib/get-query-client.js`, `app/lib/query-keys.js`) | Dedup + staleTime/gcTime                             |
-| UI primitives            | `components/ui/`                                                        | 26 个 shadcn/ui primitives（new-york, JSX）          |
-| 全局命令面板             | `app/components/CommandPalette.jsx`                                     | ⌘K / Ctrl+K；基金搜索 + 快捷操作                     |
-| 组件库升级评估           | `doc/前端组件库升级评估.md`                                             | 版本矩阵、迁移点、新 UI 方案                         |
-| Global styles            | `app/globals.css`                                                       | CSS variables, glassmorphism, responsive             |
-| CI/CD                    | `.github/workflows/nextjs.yml`                                          | Build + deploy to GitHub Pages                       |
-| Docker                   | `Dockerfile`, `docker-compose.yml`                                      | Multi-stage build with runtime env injection         |
-| localStorage schema      | `doc/localStorage 数据结构.md`                                          | Full documentation of stored data shapes             |
-| Supabase schema          | `doc/supabase.sql`                                                      | Database tables for cloud sync                       |
+| Task                     | Location                                                                | Notes                                                                |
+| ------------------------ | ----------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Fund valuation logic     | `app/api/fund.js`                                                       | JSONP to 天天基金, script injection to 腾讯财经                      |
+| Main UI orchestration    | `app/page.jsx`                                                          | Monolithic — all useState, business logic, rendering                 |
+| Modal rendering layer    | `app/components/ModalsLayer.jsx`                                        | All modal rendering extracted from page.jsx                          |
+| Fund card display        | `app/components/FundCard.jsx`                                           | Individual fund card with holdings                                   |
+| Desktop table            | `app/components/PcFundTable.jsx`                                        | PC-specific table layout                                             |
+| Mobile table             | `app/components/MobileFundTable.jsx`                                    | Mobile-specific layout, swipe actions                                |
+| Holding calculations     | `app/page.jsx` (getHoldingProfit)                                       | Profit/loss computation                                              |
+| Cloud sync               | `app/lib/supabase.js` + page.jsx sync functions                         | Supabase auth + data sync                                            |
+| Trading/DCA              | `app/components/TradeModal.jsx`, `DcaModal.jsx`                         | Buy/sell, dollar-cost averaging                                      |
+| Fund fuzzy search        | `app/hooks/useFundFuzzyMatcher.js`                                      | Fuse.js based name/code matching                                     |
+| OCR import               | `app/page.jsx` (processFiles)                                           | Tesseract.js + LLM parsing                                           |
+| Valuation intraday chart | `app/lib/valuationTimeseries.js`                                        | localStorage time-series                                             |
+| Trading calendar         | `app/lib/tradingCalendar.js`                                            | Chinese holiday detection via CDN                                    |
+| Request caching          | TanStack Query (`app/lib/get-query-client.js`, `app/lib/query-keys.js`) | Dedup + staleTime/gcTime                                             |
+| UI primitives            | `components/ui/`                                                        | 26 个 shadcn/ui primitives（new-york, JSX）                          |
+| 全局命令面板             | `app/components/CommandPalette.jsx`                                     | ⌘K / Ctrl+K；基金搜索 + 快捷操作                                     |
+| 市场快讯页               | `app/components/NewsTab.jsx`                                            | 一级 tab（快讯/精选/联播）；5 源合并去重逻辑在 `app/lib/newsFeed.js` |
+| 组件库升级评估           | `doc/前端组件库升级评估.md`                                             | 版本矩阵、迁移点、新 UI 方案                                         |
+| Global styles            | `app/globals.css`                                                       | CSS variables, glassmorphism, responsive                             |
+| CI/CD                    | `.github/workflows/nextjs.yml`                                          | Build + deploy to GitHub Pages                                       |
+| Docker                   | `Dockerfile`, `docker-compose.yml`                                      | Multi-stage build with runtime env injection                         |
+| localStorage schema      | `doc/localStorage 数据结构.md`                                          | Full documentation of stored data shapes                             |
+| Supabase schema          | `doc/supabase.sql`                                                      | Database tables for cloud sync                                       |
 
 ## CONVENTIONS
 
@@ -96,7 +97,7 @@ real-time-fund/
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- **No test infrastructure** — zero test files, no test framework, no test scripts.
+- **No test infrastructure** — 无测试框架依赖，但已有 `node:test` 单测（`app/**/__tests__/*.test.js`，约 841 例），用 `npm test` 运行。
 - **Dual ESLint configs** — both `.eslintrc.json` (legacy) and `eslint.config.mjs` (flat) exist. Flat config is active.
 - **`--legacy-peer-deps`** — Dockerfile uses this flag, indicating peer dependency conflicts.
 - **Console statements** — 20 console.error/warn/log across codebase (mostly error logging in page.jsx).

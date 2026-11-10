@@ -10,7 +10,15 @@
  *   - fund_name_em: 基金代码/拼音缩写/基金简称/基金类型/拼音全称
  *   - fund_open_fund_info_em(indicator='单位净值走势'): 净值日期/单位净值/日增长率
  *   - fund_portfolio_hold_em: 股票代码/股票名称/占净值比例/持股数/持仓市值/季度
+ *   - stock_info_global_cls: 标题/内容/发布日期/发布时间（日期与时间分两列）
+ *   - stock_info_global_em / _ths / _futu: 标题/摘要(或内容)/发布时间/链接
+ *   - stock_info_global_sina: 时间/内容（只有两列，无标题无链接）
+ *   - stock_info_cjzc_em: 标题/摘要/发布时间/链接
+ *   - stock_news_main_cx: tag/summary/url（英文列名，且无时间）
+ *   - news_cctv: date/title/content（英文列名）
  */
+
+import { AKTOOLS_NEWS_LABELS } from './aktools-config.js';
 
 const _isNil = (v) => v == null;
 
@@ -1088,10 +1096,308 @@ export const mergeSectorNetInflow = (boards, flowMap) => {
   }));
 };
 
+// ============================================================================
+// 市场资讯（快讯页）
+//
+// 8 个三方可用的资讯接口字段形态差异很大：
+//   - 财联社：日期、时间分成两列，且没有链接
+//   - 新浪：只有「时间/内容」两列，没有标题、没有链接 → 标题必须从内容派生
+//   - 财新（stock_news_main_cx）与联播（news_cctv）用英文列名，且财新没有时间
+// 因此统一收敛到下面这个条目结构，业务层与 UI 只认它：
+//   { id, source, sourceLabel, title, content, summary, tag, url, publishedAt, important }
+// ============================================================================
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/**
+ * 解析资讯时间片段。
+ *
+ * 返回 `{ date, time }`（各自可为 null），因为有的源把日期与时间拆成了两列，
+ * 必须允许「只有时间」这种半截状态，再在 mapNewsPublishedAt 里与日期列拼合。
+ *
+ * 支持：Date 对象 / 毫秒或秒时间戳 / 'YYYY-MM-DD HH:mm:ss' / 'YYYY/MM/DD' /
+ *       'YYYY年MM月DD日' / 'YYYYMMDD' / 'HH:mm(:ss)'（仅时间）
+ *
+ * @param {*} raw
+ * @returns {{ date: string|null, time: string|null }|null}
+ */
+const parseNewsDateTimeParts = (raw) => {
+  if (_isNil(raw)) return null;
+
+  if (raw instanceof Date) {
+    if (Number.isNaN(raw.getTime())) return null;
+    return {
+      date: `${raw.getFullYear()}-${pad2(raw.getMonth() + 1)}-${pad2(raw.getDate())}`,
+      time: `${pad2(raw.getHours())}:${pad2(raw.getMinutes())}:${pad2(raw.getSeconds())}`
+    };
+  }
+
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    // 10 位是秒，13 位是毫秒
+    const ms = raw > 1e11 ? raw : raw * 1000;
+    const d = new Date(ms);
+    if (Number.isNaN(d.getTime())) return null;
+    return {
+      date: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
+      time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+    };
+  }
+
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  if (!s || s.toLowerCase() === 'nan' || s.toLowerCase() === 'nat') return null;
+
+  // 8 位纯数字日期：20240313
+  if (/^\d{8}$/.test(s)) {
+    return { date: `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`, time: null };
+  }
+
+  // 纯时间：14:05 / 14:05:03（财联社的「发布时间」列）
+  const timeOnly = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (timeOnly) {
+    const hh = Number(timeOnly[1]);
+    const mm = Number(timeOnly[2]);
+    if (hh > 23 || mm > 59) return null;
+    return { date: null, time: `${pad2(hh)}:${timeOnly[2]}:${timeOnly[3] || '00'}` };
+  }
+
+  // 日期（可带时间）：2024-03-13 16:18:40 / 2024/03/13 / 2024年3月13日
+  const m = s.match(/(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!m) return null;
+  return {
+    date: `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`,
+    time: m[4] ? `${pad2(m[4])}:${m[5]}:${m[6] || '00'}` : null
+  };
+};
+
+/**
+ * 资讯行的「发布时间」→ ISO 8601 本地时间串（`YYYY-MM-DDTHH:mm:ss`，不带时区）。
+ *
+ * 不带时区是刻意的：上游全部是中国市场口径的本地时间，附上 Z 或 +08:00 反而会让
+ * 浏览器按用户时区二次换算，出现「晚间新闻显示成下午」这类偏差。
+ *
+ * @param {object} row
+ * @returns {string|null}
+ */
+export const mapNewsPublishedAt = (row) => {
+  if (!row || typeof row !== 'object') return null;
+
+  // 1) 单列就是完整日期时间（东财 / 新浪 / 同花顺 / 富途 / 财经早餐）
+  for (const key of ['发布时间', '时间']) {
+    const parts = parseNewsDateTimeParts(row[key]);
+    if (parts && parts.date) return `${parts.date}T${parts.time || '00:00:00'}`;
+  }
+
+  // 2) 日期与时间分两列（财联社：发布日期 + 发布时间）
+  const dateParts = parseNewsDateTimeParts(row['发布日期']) || parseNewsDateTimeParts(row['日期']);
+  if (dateParts && dateParts.date) {
+    const timeParts = parseNewsDateTimeParts(row['发布时间']) || parseNewsDateTimeParts(row['时间']);
+    return `${dateParts.date}T${(timeParts && timeParts.time) || '00:00:00'}`;
+  }
+
+  // 3) 英文列名兜底（news_cctv 的 date）
+  for (const key of ['date', 'datetime', 'published_at', 'pub_time']) {
+    const parts = parseNewsDateTimeParts(row[key]);
+    if (parts && parts.date) return `${parts.date}T${parts.time || '00:00:00'}`;
+  }
+
+  return null;
+};
+
+/** FNV-1a 32 位哈希 → base36；同一内容每次算出同一个 id，便于 React key 稳定 */
+const hashKey = (input) => {
+  const s = String(input || '');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
+};
+
+/** 只接受 http(s) 绝对地址，避免把 '#3' 之类的站内锚点当成外链渲染 */
+const normalizeNewsUrl = (raw) => {
+  const s = pickString(raw);
+  if (!s) return null;
+  return /^https?:\/\//i.test(s) ? s : null;
+};
+
+/**
+ * 从快讯正文派生标题。
+ *
+ * 新浪/财联社的正文普遍以 `【标题】正文…` 形式书写，取第一个方括号即可拿到真正的标题；
+ * 没有方括号时截断 40 字 —— 比整个正文当标题（会把列表撑开）或显示「无标题」都好。
+ *
+ * @param {string|null} content
+ * @returns {string|null}
+ */
+export const deriveFlashTitle = (content) => {
+  const s = pickString(content);
+  if (!s) return null;
+  const bracketed = s.match(/^【([^】]{2,60})】/);
+  if (bracketed) return bracketed[1].trim();
+  return s.length > 40 ? `${s.slice(0, 40)}…` : s;
+};
+
+/**
+ * 归一化条目构造器（全部资讯 mapper 的唯一出口）。
+ * 三项文本全空时返回 null，由上游 mapNewsRows 过滤掉。
+ */
+const buildNewsItem = ({ source, title, content, summary, tag, url, publishedAt, important = false }) => {
+  const safeTitle = pickString(title);
+  const safeContent = pickString(content);
+  const safeSummary = pickString(summary);
+  if (!safeTitle && !safeContent && !safeSummary) return null;
+  return {
+    id: `${source}:${hashKey(`${safeTitle || ''}|${safeContent || safeSummary || ''}`)}`,
+    source,
+    sourceLabel: AKTOOLS_NEWS_LABELS[source] || source,
+    title: safeTitle,
+    content: safeContent,
+    summary: safeSummary,
+    tag: pickString(tag),
+    url: normalizeNewsUrl(url),
+    publishedAt: publishedAt || null,
+    important: Boolean(important)
+  };
+};
+
+/**
+ * 整表 → 条目数组（逐行调 mapper，丢弃无效行）。
+ *
+ * @param {Array<object>} rows
+ * @param {(row: object, options?: object) => object|null} mapper
+ * @param {object} [options]
+ * @returns {Array<object>}
+ */
+export const mapNewsRows = (rows, mapper, options) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const out = [];
+  for (const row of rows) {
+    const item = mapper(row, options);
+    if (item) out.push(item);
+  }
+  return out;
+};
+
+/**
+ * 财联社电报（stock_info_global_cls）。
+ * 列：标题 / 内容 / 发布日期 / 发布时间；**无链接**。
+ * @param {object} row
+ * @param {{ important?: boolean }} [options] symbol=重点 时由调用方传 true
+ */
+export const mapMarketFlashClsRow = (row, options = {}) => {
+  if (!row || typeof row !== 'object') return null;
+  const content = pickString(row['内容']);
+  return buildNewsItem({
+    source: 'cls',
+    title: pickString(row['标题']) || deriveFlashTitle(content),
+    content,
+    url: row['链接'],
+    publishedAt: mapNewsPublishedAt(row),
+    important: options.important
+  });
+};
+
+/** 东财全球财经快讯（stock_info_global_em）：标题 / 摘要 / 发布时间 / 链接 */
+export const mapMarketFlashEmRow = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  return buildNewsItem({
+    source: 'em',
+    title: pickString(row['标题']),
+    summary: pickString(row['摘要']),
+    content: pickString(row['内容']),
+    url: row['链接'],
+    publishedAt: mapNewsPublishedAt(row)
+  });
+};
+
+/** 新浪财经 7x24（stock_info_global_sina）：只有「时间 / 内容」，标题与链接需派生 */
+export const mapMarketFlashSinaRow = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  const content = pickString(row['内容']);
+  return buildNewsItem({
+    source: 'sina',
+    title: deriveFlashTitle(content),
+    content,
+    url: row['链接'],
+    publishedAt: mapNewsPublishedAt(row)
+  });
+};
+
+/** 同花顺全球财经直播（stock_info_global_ths）：标题 / 内容 / 发布时间 / 链接 */
+export const mapMarketFlashThsRow = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  return buildNewsItem({
+    source: 'ths',
+    title: pickString(row['标题']),
+    content: pickString(row['内容']),
+    summary: pickString(row['摘要']),
+    url: row['链接'],
+    publishedAt: mapNewsPublishedAt(row)
+  });
+};
+
+/** 富途牛牛快讯（stock_info_global_futu）：标题 / 内容 / 发布时间 / 链接 */
+export const mapMarketFlashFutuRow = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  return buildNewsItem({
+    source: 'futu',
+    title: pickString(row['标题']),
+    content: pickString(row['内容']),
+    summary: pickString(row['摘要']),
+    url: row['链接'],
+    publishedAt: mapNewsPublishedAt(row)
+  });
+};
+
+/** 东财财经早餐（stock_info_cjzc_em）：标题 / 摘要 / 发布时间 / 链接 */
+export const mapBreakfastRow = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  return buildNewsItem({
+    source: 'cjzc',
+    title: pickString(row['标题']),
+    summary: pickString(row['摘要']),
+    content: pickString(row['内容']),
+    url: row['链接'],
+    publishedAt: mapNewsPublishedAt(row)
+  });
+};
+
+/**
+ * 财新数据通精选（stock_news_main_cx）：英文列名 tag / summary / url，**无时间字段**。
+ * 上游没有发布时间，publishedAt 恒为 null，排序时沉底（见 app/lib/newsFeed.js）。
+ */
+export const mapCaixinRow = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  return buildNewsItem({
+    source: 'caixin',
+    title: pickString(row.tag || row['标签']),
+    summary: pickString(row.summary || row['摘要']),
+    tag: row.tag || row['标签'],
+    url: row.url || row['链接'],
+    publishedAt: mapNewsPublishedAt(row)
+  });
+};
+
+/** 新闻联播文字稿（news_cctv）：英文列名 date / title / content */
+export const mapCctvRow = (row) => {
+  if (!row || typeof row !== 'object') return null;
+  return buildNewsItem({
+    source: 'cctv',
+    title: pickString(row.title || row['标题']),
+    content: pickString(row.content || row['内容']),
+    publishedAt: mapNewsPublishedAt(row)
+  });
+};
+
 export const __test__extended = {
   parseChineseDate,
   parseScaledAmount,
   parseFeePercent,
   toFeeParts,
-  parseRankText
+  parseRankText,
+  parseNewsDateTimeParts,
+  hashKey
 };

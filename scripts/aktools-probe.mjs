@@ -69,7 +69,19 @@ const PROBES = [
     fn: 'fund_info_index_em',
     params: { symbol: '沪深指数', indicator: '被动指数型' },
     why: '指数型基本信息：跟踪标的指数（全市场表）'
-  }
+  },
+  // ===== 市场资讯（快讯页）=====
+  // 这 8 个是「市场快讯」页的全部数据来源。默认能力开关已按 AKShare 文档口径开启，
+  // 若这里探到 500 / 超时，就把 aktools-capabilities.js 里对应项改回 false。
+  { fn: 'stock_info_global_cls', params: { symbol: '全部' }, why: '快讯-财联社电报（全部，20 条，无外链）' },
+  { fn: 'stock_info_global_cls', params: { symbol: '重点' }, why: '快讯-财联社电报（重点，上游已做重要性筛选）' },
+  { fn: 'stock_info_global_em', params: {}, why: '快讯-东财全球财经快讯（200 条，字段最全）' },
+  { fn: 'stock_info_global_sina', params: {}, why: '快讯-新浪 7x24（20 条，只有时间+内容）' },
+  { fn: 'stock_info_global_ths', params: {}, why: '快讯-同花顺全球财经直播（20 条）' },
+  { fn: 'stock_info_global_futu', params: {}, why: '快讯-富途牛牛快讯（50 条）' },
+  { fn: 'stock_info_cjzc_em', params: {}, why: '资讯-东财财经早餐（全部历史约 343 期，注意体积）' },
+  { fn: 'stock_news_main_cx', params: {}, why: '资讯-财新数据通精选（100 条，无时间字段）' },
+  { fn: 'news_cctv', params: { date: 'TODAY' }, why: '资讯-新闻联播文字稿（当日，TODAY 会替换成 YYYYMMDD）' }
 ];
 
 const parseArgs = (argv) => {
@@ -88,10 +100,18 @@ const parseArgs = (argv) => {
   return out;
 };
 
+/** 当天日期（YYYYMMDD），供 news_cctv 这类「必填日期」接口使用 */
+const todayYmd = () => {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+};
+
 const buildUrl = (base, fn, params, symbol) => {
   const qs = new URLSearchParams();
+  const today = todayYmd();
   Object.entries(params || {}).forEach(([k, v]) => {
-    qs.set(k, String(v).replaceAll('SYMBOL', symbol));
+    qs.set(k, String(v).replaceAll('SYMBOL', symbol).replaceAll('TODAY', today));
   });
   const q = qs.toString();
   return `${base}/${fn}${q ? `?${q}` : ''}`;

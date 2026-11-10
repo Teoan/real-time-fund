@@ -171,3 +171,24 @@ export const fundMetrics = (fundCode) => ['fundMetrics', String(fundCode || '').
 
 /** @param {string} secid - 业绩基准指数日线缓存键（东财 push2his kline，如 '1.000300'） */
 export const indexKline = (secid) => ['indexKline', String(secid || '').trim()];
+
+// ============================================================================
+// AKTools 市场资讯查询键（快讯页）
+//
+// 与上面的 aktools* 系列同构：`createAktoolsProviderForApp` 会把 Provider 内部的
+// `['aktools', '<能力名>', ...rest]` 映射到这里的同名工厂。工厂名必须与 Provider
+// `fetchCached` 的第一个片段一致，否则会退化成原样使用裸 queryKey。
+// ============================================================================
+
+/** @param {boolean} important - 财联社电报（symbol=重点 时为独立键） */
+export const marketFlashCls = (important) => ['aktools', 'marketFlashCls', important ? 'important' : 'all'];
+
+export const marketFlashEm = () => ['aktools', 'marketFlashEm'];
+export const marketFlashSina = () => ['aktools', 'marketFlashSina'];
+export const marketFlashThs = () => ['aktools', 'marketFlashThs'];
+export const marketFlashFutu = () => ['aktools', 'marketFlashFutu'];
+export const financeBreakfast = () => ['aktools', 'financeBreakfast'];
+export const caixinHighlights = () => ['aktools', 'caixinHighlights'];
+
+/** @param {string} date - 新闻联播日期（YYYYMMDD） */
+export const cctvNews = (date) => ['aktools', 'cctvNews', String(date || '').trim()];

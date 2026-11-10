@@ -24,7 +24,10 @@ export {
   AKTOOLS_BASE_URL,
   AKTOOLS_FUND_RANK_SYMBOLS,
   AKTOOLS_HK_VALUATION_INDICATORS,
-  AKTOOLS_HK_VALUATION_PERIOD
+  AKTOOLS_HK_VALUATION_PERIOD,
+  AKTOOLS_NEWS_SOURCES,
+  AKTOOLS_NEWS_LABELS,
+  AKTOOLS_NEWS_IMPORTANT_VIEW
 } from './aktools-config.js';
 
 export {
@@ -59,7 +62,18 @@ export {
   mapSectorBoardRow,
   mapSectorBoardRows,
   mapSectorFundFlowRows,
-  mergeSectorNetInflow
+  mergeSectorNetInflow,
+  mapNewsPublishedAt,
+  mapNewsRows,
+  deriveFlashTitle,
+  mapMarketFlashClsRow,
+  mapMarketFlashEmRow,
+  mapMarketFlashSinaRow,
+  mapMarketFlashThsRow,
+  mapMarketFlashFutuRow,
+  mapBreakfastRow,
+  mapCaixinRow,
+  mapCctvRow
 } from './aktools-mappers.js';
 
 export { createAktoolsProvider, defaultAktoolsProvider, AKTOOLS_PROVIDER } from './aktools-provider.js';

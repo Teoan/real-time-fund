@@ -18,6 +18,9 @@
  *   getFundRankOpen({ symbol, limit }) -> { symbol, rows: [{ code, name, year1, ... }], total, dataDate }
  *   getFundValuationRank({ limit }) -> { rows: [{ code, estChange, navChange, deviation, ... }], total, dataDate }
  *   getSectorBoards({ type }) -> { type, rows: [{ sector_name, sector_type, change_pct, net_inflow }], total }
+ *   getMarketFlashCls/Em/Sina/Ths/Futu({ force }) -> [{ id, source, title, content, publishedAt, url, important }]
+ *   getFinanceBreakfast/getCaixinHighlights({ force }) -> [{ ... }]
+ *   getCctvNews(date, { force }) -> [{ ... }]
  *
  * 所有方法使用注入的缓存抽象（默认 no-op；业务侧通过 createAktoolsProviderForApp 注入真实缓存）
  * 不实现的接口直接抛 AktoolsUnsupportedError，由调用方决定 fallback。
@@ -56,7 +59,16 @@ import {
   mapStockRoe,
   mapStockHkRoe,
   mapStockHkValueHistory,
-  mapStockUsFinancial
+  mapStockUsFinancial,
+  mapNewsRows,
+  mapMarketFlashClsRow,
+  mapMarketFlashEmRow,
+  mapMarketFlashSinaRow,
+  mapMarketFlashThsRow,
+  mapMarketFlashFutuRow,
+  mapBreakfastRow,
+  mapCaixinRow,
+  mapCctvRow
 } from './aktools-mappers.js';
 import { createAktoolsClient } from './aktools-client.js';
 
@@ -962,6 +974,140 @@ export function createAktoolsProvider(options = {}) {
     );
   };
 
+  // ==========================================================================
+  // 市场资讯（快讯页）
+  //
+  // 8 个方法的共同点：返回「归一化条目数组」，上游空表就是 []（资讯为空是合法状态，
+  // 不像板块那样需要抛错）。所有方法都接受 { force }：跳过本 Provider 的内存缓存直连上游，
+  // 用于「用户点刷新」——否则 60s 内的刷新会被缓存吃掉，按钮看起来像坏了。
+  // ⚠️ force 路径不写回缓存（缓存抽象没有这个接口），下一次非 force 调用仍可能读到旧值。
+  // ==========================================================================
+
+  /**
+   * 资讯类取数：能力守卫 → 取数 → 映射。
+   * @param {{ capability: string, endpoint: string, params?: object, cacheKey: Array,
+   *           ttl: number, mapper: Function, options?: object, force?: boolean }} args
+   */
+  const fetchNewsFeed = async ({ capability, endpoint, params, cacheKey, ttl, mapper, options, force }) => {
+    if (!isCapabilitySupported(capabilities, capability)) {
+      throw new AktoolsUnsupportedError(`AKTools Provider 未启用 ${capability}`);
+    }
+    const run = async () => {
+      const rows = await client.call(endpoint, params);
+      return mapNewsRows(rows, mapper, options);
+    };
+    if (force) return run();
+    return fetchCached(cacheKey, run, ttl);
+  };
+
+  /** 联播日期归一：'2026-11-10' / '20261110' → '20261110'；非法返回 null */
+  const normalizeCctvDate = (raw) => {
+    const s = String(raw || '').trim();
+    if (/^\d{8}$/.test(s)) return s;
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${m[1]}${m[2]}${m[3]}` : null;
+  };
+
+  /** 财联社电报（stock_info_global_cls）：symbol=全部 / 重点，单次 20 条，无外链 */
+  const getMarketFlashCls = async ({ important = false, force = false } = {}) =>
+    fetchNewsFeed({
+      capability: 'getMarketFlashCls',
+      endpoint: AKTOOLS_ENDPOINTS.getMarketFlashCls,
+      params: { symbol: important ? '重点' : '全部' },
+      cacheKey: ['marketFlashCls', important ? 'important' : 'all'],
+      ttl: AKTOOLS_CACHE_TTL.getMarketFlashCls,
+      mapper: mapMarketFlashClsRow,
+      options: { important },
+      force
+    });
+
+  /** 东财全球财经快讯（stock_info_global_em）：单次 200 条 */
+  const getMarketFlashEm = async ({ force = false } = {}) =>
+    fetchNewsFeed({
+      capability: 'getMarketFlashEm',
+      endpoint: AKTOOLS_ENDPOINTS.getMarketFlashEm,
+      cacheKey: ['marketFlashEm'],
+      ttl: AKTOOLS_CACHE_TTL.getMarketFlashEm,
+      mapper: mapMarketFlashEmRow,
+      force
+    });
+
+  /** 新浪财经 7x24（stock_info_global_sina）：单次 20 条，标题从正文派生 */
+  const getMarketFlashSina = async ({ force = false } = {}) =>
+    fetchNewsFeed({
+      capability: 'getMarketFlashSina',
+      endpoint: AKTOOLS_ENDPOINTS.getMarketFlashSina,
+      cacheKey: ['marketFlashSina'],
+      ttl: AKTOOLS_CACHE_TTL.getMarketFlashSina,
+      mapper: mapMarketFlashSinaRow,
+      force
+    });
+
+  /** 同花顺全球财经直播（stock_info_global_ths）：单次 20 条 */
+  const getMarketFlashThs = async ({ force = false } = {}) =>
+    fetchNewsFeed({
+      capability: 'getMarketFlashThs',
+      endpoint: AKTOOLS_ENDPOINTS.getMarketFlashThs,
+      cacheKey: ['marketFlashThs'],
+      ttl: AKTOOLS_CACHE_TTL.getMarketFlashThs,
+      mapper: mapMarketFlashThsRow,
+      force
+    });
+
+  /** 富途牛牛快讯（stock_info_global_futu）：单次 50 条 */
+  const getMarketFlashFutu = async ({ force = false } = {}) =>
+    fetchNewsFeed({
+      capability: 'getMarketFlashFutu',
+      endpoint: AKTOOLS_ENDPOINTS.getMarketFlashFutu,
+      cacheKey: ['marketFlashFutu'],
+      ttl: AKTOOLS_CACHE_TTL.getMarketFlashFutu,
+      mapper: mapMarketFlashFutuRow,
+      force
+    });
+
+  /**
+   * 东财财经早餐（stock_info_cjzc_em）：单次返回**全部历史**（实测约 343 期）。
+   * 裁剪到最新 N 期由业务层负责（app/api/fund.js），Provider 只做映射，保持数据完整。
+   */
+  const getFinanceBreakfast = async ({ force = false } = {}) =>
+    fetchNewsFeed({
+      capability: 'getFinanceBreakfast',
+      endpoint: AKTOOLS_ENDPOINTS.getFinanceBreakfast,
+      cacheKey: ['financeBreakfast'],
+      ttl: AKTOOLS_CACHE_TTL.getFinanceBreakfast,
+      mapper: mapBreakfastRow,
+      force
+    });
+
+  /** 财新数据通精选（stock_news_main_cx）：100 条，无时间字段 */
+  const getCaixinHighlights = async ({ force = false } = {}) =>
+    fetchNewsFeed({
+      capability: 'getCaixinHighlights',
+      endpoint: AKTOOLS_ENDPOINTS.getCaixinHighlights,
+      cacheKey: ['caixinHighlights'],
+      ttl: AKTOOLS_CACHE_TTL.getCaixinHighlights,
+      mapper: mapCaixinRow,
+      force
+    });
+
+  /**
+   * 新闻联播文字稿（news_cctv）：按日期取单日，数据从 2016-03-30 至今。
+   * @param {string} date 'YYYY-MM-DD' 或 'YYYYMMDD'（必填，上游没有「最新」语义）
+   */
+  const getCctvNews = async (date, { force = false } = {}) => {
+    const normalized = normalizeCctvDate(date);
+    if (!normalized) throw new AktoolsError('新闻联播需要指定日期（YYYYMMDD）');
+    return fetchNewsFeed({
+      capability: 'getCctvNews',
+      endpoint: AKTOOLS_ENDPOINTS.getCctvNews,
+      params: { date: normalized },
+      cacheKey: ['cctvNews', normalized],
+      ttl: AKTOOLS_CACHE_TTL.getCctvNews,
+      mapper: mapCctvRow,
+      force
+    });
+  };
+
   const healthCheck = async () => client.healthCheck();
 
   return {
@@ -991,6 +1137,14 @@ export function createAktoolsProvider(options = {}) {
     getStockHkRoe,
     getStockHkValueHistory,
     getStockUsFinancial,
+    getMarketFlashCls,
+    getMarketFlashEm,
+    getMarketFlashSina,
+    getMarketFlashThs,
+    getMarketFlashFutu,
+    getFinanceBreakfast,
+    getCaixinHighlights,
+    getCctvNews,
     healthCheck,
     /**
      * 清空本实例承载的全部缓存。
